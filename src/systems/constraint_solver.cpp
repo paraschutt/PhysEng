@@ -4,6 +4,7 @@
 // Entities processed in deterministic order (sort by EntityPair)
 // ============================================================================
 #include "dspe/systems/constraint_solver.h"
+#include "dspe/systems/skeleton.h"
 #include <algorithm>
 #include <cmath>
 

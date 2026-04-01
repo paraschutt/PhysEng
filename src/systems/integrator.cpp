@@ -2,6 +2,7 @@
 // DSPE Integrator Implementation
 // ============================================================================
 #include "dspe/systems/integrator.h"
+#include "dspe/systems/skeleton.h"
 #include <algorithm>
 #include <cstdlib>
 

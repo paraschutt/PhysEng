@@ -2,9 +2,9 @@
 // ============================================================================
 // DSPE ECS Components
 // ============================================================================
-#include "math_types.h"
-#include "materials.h"
-#include "entity.h"
+#include "dspe/math_types.h"
+#include "dspe/materials.h"
+#include "dspe/entity.h"
 #include <array>
 #include <cstdint>
 
@@ -299,9 +299,9 @@ struct Entity {
     TriggerVolume  trigger{};
     SleepState  sleep{};
 
-    bool has(ComponentFlag f) const { return (component_mask & f) != 0; }
-    void add(ComponentFlag f) { component_mask |= f; }
-    void remove(ComponentFlag f) { component_mask &= ~f; }
+    bool has(uint32_t f) const { return (component_mask & f) != 0; }
+    void add(uint32_t f) { component_mask |= f; }
+    void remove(uint32_t f) { component_mask &= ~f; }
 };
 
 } // namespace dspe

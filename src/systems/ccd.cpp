@@ -5,6 +5,7 @@
 #include "dspe/systems/ccd.h"
 #include <algorithm>
 #include <limits>
+#include <cmath>
 
 namespace dspe {
 
@@ -188,10 +189,12 @@ bool ContinuousCollisionDetection::needs_ccd(const Entity& e, FpVel dt) {
     FpVel displacement = speed * dt;
 
     FpVel threshold;
-    if (e.collider.shape_type == ShapeType::SPHERE)
-        threshold = e.collider.sphere.radius * FpVel::from_float(0.5f);
-    else
+    if (e.collider.shape_type == ShapeType::SPHERE) {
+        // Convert FpPos radius to FpVel: Q24.8 -> Q15.16 (shift left 8)
+        threshold = FpVel{e.collider.sphere.radius.raw << 8} * FpVel::from_float(0.5f);
+    } else {
         threshold = FpVel{e.collider.capsule.radius.raw << 8} * FpVel::from_float(0.5f);
+    }
 
     return displacement > threshold;
 }
