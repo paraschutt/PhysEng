@@ -24,7 +24,7 @@ struct SolverParams {
     FpVel   baumgarte_beta   = FpVel::from_float(0.2f);   // Position correction
     FpVel   baumgarte_slop   = FpVel::from_float(0.005f); // Penetration tolerance
     FpVel   warm_start_scale = FpVel::from_float(0.8f);   // Impulse decay between frames
-    FpVel   restitution_slop = FpVel::from_float(0.5f);   // Min relative vel for bounce
+    FpVel   restitution_slop = FpVel::from_float(0.1f);   // Min relative vel for bounce
     FpVel   max_impulse      = FpVel::from_float(10000.0f); // Safety clamp
 };
 
