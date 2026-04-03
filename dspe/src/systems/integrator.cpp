@@ -5,6 +5,9 @@
 #include "dspe/systems/skeleton.h"
 #include <algorithm>
 #include <cstdlib>
+#ifdef DSPE_DEBUG_INTEGRATE
+#include <cstdio>
+#endif
 
 namespace dspe {
 
@@ -151,10 +154,19 @@ void Integrator::integrate_entity(Entity& e,
                                    FpVel dt) {
     RigidBody& rb = e.rigidbody;
 
+    #ifdef DSPE_DEBUG_INTEGRATE
+    printf("[DBG integrate] dt.raw=%d  v.y.raw=%d  a.y.raw=%d\n",
+           dt.raw, rb.velocity.y.raw, rb.acceleration.y.raw);
+    #endif
+
     // ─── Step 1: Half-step velocity  ────────────────────────────────────────
     // v(t + dt/2) = v(t) + 0.5 * a(t) * dt
     FpVel half_dt = dt >> 1;  // dt/2 in Q15.16
     rb.velocity = vel_add_acc_dt(rb.velocity, rb.acceleration, half_dt);
+
+    #ifdef DSPE_DEBUG_INTEGRATE
+    printf("[DBG step1] half_dt.raw=%d  v.y.raw=%d\n", half_dt.raw, rb.velocity.y.raw);
+    #endif
 
     // ─── Step 2: Full-step position  ────────────────────────────────────────
     // x(t + dt) = x(t) + v(t + dt/2) * dt
@@ -189,10 +201,7 @@ void Integrator::integrate_entity(Entity& e,
 
 void Integrator::apply_ground_clamp(Entity& e) {
     RigidBody& rb = e.rigidbody;
-    // Safety backstop only — do NOT zero velocity here.
-    // Velocity response belongs to the constraint solver (restitution, friction).
-    // This clamp only prevents the position from sinking below the floor,
-    // which can happen if the solver hasn't fully resolved penetration yet.
+    // Ground is at y=0; collider radius offsets the clamp
     FpPos ground_y = FpPos::zero();
     if (e.has(COMP_COLLIDER)) {
         if (e.collider.shape_type == ShapeType::SPHERE) {
@@ -203,44 +212,19 @@ void Integrator::apply_ground_clamp(Entity& e) {
     }
     if (rb.position.y < ground_y) {
         rb.position.y = ground_y;
-        // Only kill downward velocity when deeply penetrating (not a bounce)
-        // Threshold: 2x radius means we've really fallen through geometry
-        FpPos deep_threshold = FpPos{ground_y.raw << 1};
-        if (rb.position.y < -deep_threshold) {
-            rb.velocity.y = FpVel::zero();
-        }
+        if (rb.velocity.y.raw < 0) rb.velocity.y = FpVel::zero();
     }
 }
 
 void Integrator::clamp_velocity(Entity& e) {
     RigidBody& rb = e.rigidbody;
-    // BUG GUARD: Q15.16 cannot represent 200^2 = 40000 (max ~32767).
-    // MAX_SPEED.raw = 13,107,200; squaring via operator* overflows int32_t to
-    // a negative number, making the clamp trigger on every entity every substep.
-    // Fix: compare speed_sq against max_sq using int64 raw arithmetic.
-    int64_t vx = rb.velocity.x.raw;
-    int64_t vy = rb.velocity.y.raw;
-    int64_t vz = rb.velocity.z.raw;
-    int64_t speed_sq_raw2 = vx*vx + vy*vy + vz*vz;   // units: raw^2 (not Q15.16)
-    int64_t max_raw       = MAX_SPEED.raw;
-    int64_t max_sq_raw2   = max_raw * max_raw;         // stays in int64, no overflow
-    if (speed_sq_raw2 <= max_sq_raw2) return;          // common case: nothing to do
-
-    // Compute speed in raw units using integer sqrt (Newton-Raphson on int64)
-    int64_t speed_raw = max_raw; // initial guess = MAX_SPEED
-    for (int i = 0; i < 16; ++i) {
-        if (speed_raw == 0) break;
-        int64_t next = (speed_raw + speed_sq_raw2 / speed_raw) >> 1;
-        if (next >= speed_raw) break;
-        speed_raw = next;
+    FpVel speed_sq = rb.velocity.length_sq();
+    FpVel max_sq   = MAX_SPEED * MAX_SPEED;
+    if (speed_sq > max_sq) {
+        FpVel speed = fp_sqrt(speed_sq);
+        if (speed.raw == 0) return;
+        rb.velocity = rb.velocity * (MAX_SPEED / speed);
     }
-    if (speed_raw == 0) return;
-
-    // Scale each component: v_new = v * (MAX_SPEED.raw / speed_raw)
-    // Both are in the same raw units so the ratio is dimensionless
-    rb.velocity.x.raw = (int32_t)(vx * max_raw / speed_raw);
-    rb.velocity.y.raw = (int32_t)(vy * max_raw / speed_raw);
-    rb.velocity.z.raw = (int32_t)(vz * max_raw / speed_raw);
 }
 
 // ============================================================================

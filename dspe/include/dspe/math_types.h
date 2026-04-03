@@ -47,15 +47,8 @@ struct Vec3 {
         };
     }
 
-    // Squared length — NOTE: overflows Q15.16 for values > ~181 (e.g. 200^2 = 40000 > 32767)
-    // For safety-critical code (velocity clamping) use length_sq_i64() instead.
+    // Squared length
     constexpr Fp length_sq() const { return dot(*this); }
-
-    // Squared length in raw^2 units (int64) — overflow-safe for any velocity
-    int64_t length_sq_i64() const {
-        int64_t rx = x.raw, ry = y.raw, rz = z.raw;
-        return rx*rx + ry*ry + rz*rz;
-    }
 
     // Length via deterministic sqrt
     Fp length() const { return fp_sqrt(length_sq()); }

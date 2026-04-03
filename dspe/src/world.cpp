@@ -14,14 +14,6 @@ World::World(const WorldConfig& config)
     : solver_(config.solver), surface_(config.surface) {
     manifolds_.reserve(400);
     trigger_system_.init_pitch_triggers(entities_, config.pitch);
-
-    // Create implicit ground plane: a large static box at y = -0.5m (half-extent 0.5m)
-    // so its top face is exactly at y = 0. Ball resting on ground touches at ball_radius.
-    create_static_box(
-        { FpPos::zero(), FpPos::from_float(-0.5f), FpPos::zero() },
-        { FpPos::from_float(200.0f), FpPos::from_float(0.5f), FpPos::from_float(200.0f) },
-        MAT_DRY_GRASS
-    );
 }
 
 // ============================================================================
