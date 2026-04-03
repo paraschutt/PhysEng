@@ -491,7 +491,10 @@ bool NarrowPhase::sphere_box(const Collider& cs, const Vec3Pos& ps,
     FpVel rs{(cs.sphere.radius.raw << 8)};
     FpVel   rs2 = rs * rs;
 
-    if (dist2 >= rs2) return false;
+    // Use strict > so that dist == rs (exact touching) also registers as contact.
+    // With >= the fixed-point rounding causes dist2 == rs2 exactly when ball
+    // sits at its resting position, silently missing the contact.
+    if (dist2 > rs2) return false;
 
     out.clear();
     ContactPoint cp;
