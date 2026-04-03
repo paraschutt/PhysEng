@@ -243,6 +243,33 @@ void Integrator::clamp_velocity(Entity& e) {
     rb.velocity.z.raw = (int32_t)(vz * max_raw / speed_raw);
 }
 
+void Integrator::clamp_angular_velocity(Entity& e) {
+    // Similar to linear velocity clamp but for angular velocity in Q8.24
+    RigidBody& rb = e.rigidbody;
+    int64_t wx = rb.angular_velocity.x.raw;
+    int64_t wy = rb.angular_velocity.y.raw;
+    int64_t wz = rb.angular_velocity.z.raw;
+    int64_t speed_sq_raw2 = wx*wx + wy*wy + wz*wz; // raw^2 units
+    int64_t max_raw       = MAX_ANGULAR_SPEED.raw;
+    int64_t max_sq_raw2   = max_raw * max_raw;
+    if (speed_sq_raw2 <= max_sq_raw2) return;
+
+    // Compute speed in raw units using integer sqrt
+    int64_t speed_raw = max_raw; // initial guess
+    for (int i = 0; i < 16; ++i) {
+        if (speed_raw == 0) break;
+        int64_t next = (speed_raw + speed_sq_raw2 / speed_raw) >> 1;
+        if (next >= speed_raw) break;
+        speed_raw = next;
+    }
+    if (speed_raw == 0) return;
+
+    // Scale components
+    rb.angular_velocity.x.raw = (int32_t)(wx * max_raw / speed_raw);
+    rb.angular_velocity.y.raw = (int32_t)(wy * max_raw / speed_raw);
+    rb.angular_velocity.z.raw = (int32_t)(wz * max_raw / speed_raw);
+}
+
 // ============================================================================
 // InputSystem
 // ============================================================================

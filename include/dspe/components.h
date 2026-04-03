@@ -33,6 +33,7 @@ static const FpVel PLAYER_MASS  = FpVel::from_float(75.0f);    // kg
 
 // Velocity clamp (safety)
 static const FpVel MAX_SPEED    = FpVel::from_float(200.0f);   // m/s absolute max
+static const FpVel MAX_ANGULAR_SPEED = FpVel::from_float(50.0f); // rad/s absolute max
 
 // ---------------------------------------------------------------------------
 // RigidBody component

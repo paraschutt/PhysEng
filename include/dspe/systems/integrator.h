@@ -67,6 +67,9 @@ public:
     // Velocity safety clamp (prevent solver explosions)
     static void clamp_velocity(Entity& e);
 
+    // Angular velocity clamp (prevent solver explosions)
+    static void clamp_angular_velocity(Entity& e);
+
 private:
     // Single entity Verlet integration (one substep)
     void integrate_entity(Entity& e, const SurfaceState& surface, FpVel dt);
