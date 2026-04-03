@@ -50,7 +50,9 @@ void NarrowPhase::closest_points_segment_segment(
 
     FpVel s, t;
 
-    FpVel eps = FpVel::from_float(1e-6f);
+    // Epsilon for degenerate segment detection.
+    // 1e-6 in Q15.16 rounds to 0 raw — use 1 raw unit (≈1.5e-5 m) instead.
+    FpVel eps{1};
 
     if (a <= eps && e <= eps) {
         // Both degenerate (points)
