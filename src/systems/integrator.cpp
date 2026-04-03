@@ -184,6 +184,7 @@ void Integrator::integrate_entity(Entity& e,
 
     // ─── Safety clamps ───────────────────────────────────────────────────────
     clamp_velocity(e);
+    clamp_angular_velocity(e);
     apply_ground_clamp(e);
 }
 
