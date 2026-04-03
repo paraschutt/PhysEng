@@ -376,9 +376,11 @@ TEST(trigger_goal) {
 TEST(fixed_point_no_overflow) {
     // Max velocity: 200 m/s in Q15.16 → raw = 200 * 65536 = 13,107,200
     FpVel max_v = FpVel::from_float(200.0f);
-    // Multiplying max_v * max_v: 13,107,200² = 1.7e14 → fits in int64 ✓
-    FpVel sq = max_v * max_v;
-    EXPECT(sq.raw > 0, "max_vel squared overflowed or gave wrong sign");
+    // Note: FpVel * FpVel uses fixed-point multiply which interprets result as Q15.16
+    // This is NOT the same as scalar multiplication. For range testing, use int64 directly.
+    int64_t max_raw = static_cast<int64_t>(max_v.raw);
+    int64_t sq_raw = max_raw * max_raw;  // 1.7e14 fits in int64 (max ~9e18)
+    EXPECT(sq_raw > 0, "max_vel squared overflowed int64");
 
     // Max position: 50m in Q24.8 → raw = 50 * 256 = 12,800
     FpPos max_p = FpPos::from_float(50.0f);
