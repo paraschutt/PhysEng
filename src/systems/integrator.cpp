@@ -245,9 +245,17 @@ void InputSystem::apply(Entity& player_entity,
     RigidBody& rb = player_entity.rigidbody;
     Skeleton&  sk = player_entity.skeleton;
 
-    // Friction circle: a_max = μ * g  (player can only push as hard as ground allows)
-    FpVel mu      = surface.apply_wetness(
-                        get_material(MAT_DRY_GRASS).kinetic_mu);
+    // Friction circle: a_max = μ * g
+    // Use the ground surface kinetic_mu, then apply wetness.
+    // Surface kinetic_mu is taken from the ground material (MAT_DRY_GRASS base)
+    // and modulated by wetness. At full wet (wetness=0), factor=0.5:
+    //   0.60 * 0.5 = 0.30  (too low vs brief's 0.35 for wet grass)
+    // Use MAT_WET_GRASS directly when surface is predominantly wet.
+    // Threshold: wetness < 0.5 → use wet grass material directly.
+    MaterialId surface_mat = (surface.wetness < FpVel::from_float(0.5f))
+                             ? MAT_WET_GRASS : MAT_DRY_GRASS;
+    FpVel base_mu = get_material(surface_mat).kinetic_mu;
+    FpVel mu      = surface.apply_wetness(base_mu);
     FpVel a_max   = mu * GRAVITY;  // m/s²
 
     // Desired acceleration toward target velocity
