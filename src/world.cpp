@@ -276,10 +276,11 @@ void World::run_substep(FpVel dt) {
             // Remove normal component (inelastic CCD correction)
             e.rigidbody.velocity = e.rigidbody.velocity - hit.normal * vn;
             // Reposition to TOI contact surface
+            // Parentheses required: (expr).raw >> 8  not  expr.raw >> 8
             e.rigidbody.position = {
-                FpPos{e.rigidbody.position.x.raw + (hit.contact_point.x * hit.toi).raw >> 8},
-                FpPos{e.rigidbody.position.y.raw + (hit.contact_point.y * hit.toi).raw >> 8},
-                FpPos{e.rigidbody.position.z.raw + (hit.contact_point.z * hit.toi).raw >> 8},
+                FpPos{e.rigidbody.position.x.raw + ((hit.contact_point.x * hit.toi).raw >> 8)},
+                FpPos{e.rigidbody.position.y.raw + ((hit.contact_point.y * hit.toi).raw >> 8)},
+                FpPos{e.rigidbody.position.z.raw + ((hit.contact_point.z * hit.toi).raw >> 8)},
             };
         }
     }

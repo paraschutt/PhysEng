@@ -27,9 +27,12 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     )
 elseif(MSVC)
     add_compile_options(
-        /fp:precise      # Prevent extended precision; equivalent to -ffloat-store
-        /fp:contract-    # Disable FMA contraction
+        /fp:precise   # Strict IEEE-754, no extended precision
+                      # Note: MSVC has no equivalent of -ffp-contract=off.
+                      # /fp:precise disables most FMA contraction by default.
+                      # For guaranteed no-FMA, add /fp:strict (disables some opts).
         /W3
+        /wd4554       # Suppress: check operator precedence for >> (false positive on .raw >> N)
     )
 endif()
 
@@ -68,7 +71,9 @@ add_test(NAME Phase1Suite COMMAND dspe_tests)
 # ============================================================================
 add_executable(dspe_bench tests/test_phase1.cpp)
 target_link_libraries(dspe_bench PRIVATE dspe)
-target_compile_options(dspe_bench PRIVATE -O3 -DNDEBUG)
+target_compile_options(dspe_bench PRIVATE
+    $<IF:$<CXX_COMPILER_ID:MSVC>,/O2 /DNDEBUG,-O3 -DNDEBUG>
+)
 
 # ============================================================================
 # Sanity: print active determinism flags in build output

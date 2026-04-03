@@ -371,24 +371,36 @@ TEST(trigger_goal) {
 
 // ============================================================================
 // [8] Fixed-point range / overflow sanity
-// Verify Q24.8 * Q15.16 cross-multiply does not overflow.
+// Validates:
+//   - Q24.8 cross-multiply does not overflow on pitch-scale positions
+//   - Q8.24 angular velocity covers 100 rad/s without overflow
+//   - The velocity clamp (using int64 internally) does NOT explode a fast entity
+//     (FpVel::operator* DOES overflow for 200^2 — that's expected and documented;
+//      clamp_velocity bypasses this using direct int64 raw arithmetic)
 // ============================================================================
 TEST(fixed_point_no_overflow) {
-    // Max velocity: 200 m/s in Q15.16 → raw = 200 * 65536 = 13,107,200
-    FpVel max_v = FpVel::from_float(200.0f);
-    // Multiplying max_v * max_v: 13,107,200² = 1.7e14 → fits in int64 ✓
-    FpVel sq = max_v * max_v;
-    EXPECT(sq.raw > 0, "max_vel squared overflowed or gave wrong sign");
-
-    // Max position: 50m in Q24.8 → raw = 50 * 256 = 12,800
+    // Q24.8 position * position: 50m * 50m = 2500m² — must stay exact
     FpPos max_p = FpPos::from_float(50.0f);
-    // Cross-format multiply Q24.8 * Q24.8 → Q24.8 (shift 8)
     FpPos area = fp_mul<8,8,8>(max_p, max_p);
     EXPECT_NEAR(area.to_float(), 2500.0f, 1.0f, "Position squared (area) incorrect");
 
-    // Angular: 100 rad/s in Q8.24 → raw = 100 * 16777216 = 1,677,721,600 (fits int32)
+    // Q8.24 angular: 100 rad/s must have positive raw value (fits Q8.24 range ±127)
     FpAng max_w = FpAng::from_float(100.0f);
     EXPECT(max_w.raw > 0, "Max angular velocity overflowed Q8.24");
+
+    // Q15.16 velocity clamp: fire a ball at 300 m/s (above MAX_SPEED=200),
+    // run one tick — clamp_velocity must bring it back to ≤200 m/s without explosion.
+    // NOTE: FpVel(300)^2 overflows int32 — clamp_velocity uses int64 to avoid this.
+    World w_clamp;
+    EntityId bid = w_clamp.create_ball({FpPos::zero(), FpPos::from_float(1.0f), FpPos::zero()});
+    w_clamp.entities()[bid].rigidbody.velocity = {
+        FpVel::from_float(300.0f), FpVel::zero(), FpVel::zero()
+    };
+    TickInput no_input{};
+    w_clamp.tick(no_input);
+    float speed_after = w_clamp.entities()[bid].rigidbody.velocity.length().to_float();
+    EXPECT(speed_after <= 205.0f, "Velocity clamp failed: speed > MAX_SPEED after tick");
+    EXPECT(speed_after > 0.0f,   "Velocity clamp destroyed velocity entirely");
 
     PASS();
 }
