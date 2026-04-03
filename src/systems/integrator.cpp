@@ -189,26 +189,15 @@ void Integrator::integrate_entity(Entity& e,
 
 void Integrator::apply_ground_clamp(Entity& e) {
     RigidBody& rb = e.rigidbody;
-    // Safety backstop only — do NOT zero velocity here.
-    // Velocity response belongs to the constraint solver (restitution, friction).
-    // This clamp only prevents the position from sinking below the floor,
-    // which can happen if the solver hasn't fully resolved penetration yet.
-    FpPos ground_y = FpPos::zero();
-    if (e.has(COMP_COLLIDER)) {
-        if (e.collider.shape_type == ShapeType::SPHERE) {
-            ground_y = e.collider.sphere.radius;
-        } else if (e.collider.shape_type == ShapeType::CAPSULE) {
-            ground_y = e.collider.capsule.radius;
-        }
-    }
-    if (rb.position.y < ground_y) {
-        rb.position.y = ground_y;
-        // Only kill downward velocity when deeply penetrating (not a bounce)
-        // Threshold: 2x radius means we've really fallen through geometry
-        FpPos deep_threshold = FpPos{ground_y.raw << 1};
-        if (rb.position.y < -deep_threshold) {
-            rb.velocity.y = FpVel::zero();
-        }
+    // Emergency backstop ONLY — fires when entity falls more than 5m below ground.
+    // Normal ground contact (including bouncing) is handled by the constraint solver
+    // via sphere_box / capsule_box contact manifolds.
+    // DO NOT reset position to ball_radius here — that puts the ball at exactly
+    // dist == rs, which the narrow phase misses due to fixed-point rounding.
+    FpPos deep_threshold = FpPos::from_float(-5.0f);
+    if (rb.position.y < deep_threshold) {
+        rb.position.y = FpPos::zero();
+        rb.velocity.y = FpVel::zero();
     }
 }
 
