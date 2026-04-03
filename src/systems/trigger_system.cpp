@@ -10,7 +10,9 @@ namespace dspe {
 // ============================================================================
 EntityId TriggerSystem::alloc_trigger_entity(
     std::array<Entity, MAX_ENTITIES>& entities) {
-    for (EntityId id = ENV_BEGIN; id < ENV_END; ++id) {
+    // Entity 31 (ENV_BEGIN) is reserved for the implicit ground plane
+    // created in World::World(). Triggers start at ENV_BEGIN+1.
+    for (EntityId id = ENV_BEGIN + 1; id < ENV_END; ++id) {
         if (entities[id].component_mask == COMP_NONE) {
             entities[id].add(ARCH_TRIGGER);
             return id;
