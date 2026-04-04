@@ -3,6 +3,9 @@ build/
 bin/
 out/
 
+# Claw-code
+claw-code-parity/
+
 # CMake generated files
 CMakeCache.txt
 CMakeFiles/
