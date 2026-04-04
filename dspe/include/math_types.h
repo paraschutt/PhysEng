@@ -2,7 +2,7 @@
 // ============================================================================
 // DSPE Math Types — Vec3 and Quaternion over fixed-point formats
 // ============================================================================
-#include "dspe/fixed_point.h"
+#include "fixed_point.h"
 #include <cstdint>
 
 namespace dspe {

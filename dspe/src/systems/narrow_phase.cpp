@@ -5,7 +5,7 @@
 // GJK: standard simplex-based distance algorithm
 // EPA: polytope expansion for penetration depth
 // ============================================================================
-#include "dspe/systems/narrow_phase.h"
+#include "systems/narrow_phase.h"
 #include <algorithm>
 #include <array>
 

@@ -1,7 +1,7 @@
 // ============================================================================
 // DSPE World Implementation
 // ============================================================================
-#include "dspe/world.h"
+#include "world.h"
 #include <algorithm>
 #include <cstdio>
 

@@ -1,8 +1,8 @@
 // ============================================================================
 // DSPE Integrator Implementation
 // ============================================================================
-#include "dspe/systems/integrator.h"
-#include "dspe/systems/skeleton.h"
+#include "systems/integrator.h"
+#include "systems/skeleton.h"
 #include <algorithm>
 #include <cstdlib>
 #ifdef DSPE_DEBUG_INTEGRATE

@@ -9,7 +9,7 @@
 //   [6] Friction cone: player sliding on wet grass stops at μ-correct distance
 //   [7] Trigger: ball crossing goal line fires EVENT_GOAL within 1 tick
 // ============================================================================
-#include "dspe/world.h"
+#include "world.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>

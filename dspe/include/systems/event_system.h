@@ -2,8 +2,8 @@
 // ============================================================================
 // DSPE Event System — collision callbacks, trigger events, game events
 // ============================================================================
-#include "dspe/entity.h"
-#include "dspe/math_types.h"
+#include "entity.h"
+#include "math_types.h"
 #include <cstdint>
 #include <array>
 #include <functional>

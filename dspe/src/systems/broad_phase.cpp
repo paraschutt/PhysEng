@@ -2,7 +2,7 @@
 // DSPE Broad Phase — Dynamic AABB Tree Implementation
 // Rotations maintain balance (height difference ≤ 1 between siblings)
 // ============================================================================
-#include "dspe/systems/broad_phase.h"
+#include "systems/broad_phase.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>

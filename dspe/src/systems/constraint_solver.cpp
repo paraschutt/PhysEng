@@ -3,8 +3,8 @@
 // 10 iterations, β=0.2, slop=0.005m, friction cone, joint warm-starting
 // Entities processed in deterministic order (sort by EntityPair)
 // ============================================================================
-#include "dspe/systems/constraint_solver.h"
-#include "dspe/systems/skeleton.h"
+#include "systems/constraint_solver.h"
+#include "systems/skeleton.h"
 #include <algorithm>
 #include <cmath>
 

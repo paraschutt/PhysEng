@@ -2,7 +2,7 @@
 // DSPE CCD — Swept Sphere Implementation
 // Detects tunnelling: ball at 30 m/s, substep 4.166ms → 0.125m/substep
 // ============================================================================
-#include "dspe/systems/ccd.h"
+#include "systems/ccd.h"
 #include <algorithm>
 #include <limits>
 #include <cmath>

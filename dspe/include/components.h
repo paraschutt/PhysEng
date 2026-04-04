@@ -2,9 +2,9 @@
 // ============================================================================
 // DSPE ECS Components
 // ============================================================================
-#include "dspe/math_types.h"
-#include "dspe/materials.h"
-#include "dspe/entity.h"
+#include "math_types.h"
+#include "materials.h"
+#include "entity.h"
 #include <array>
 #include <cstdint>
 
