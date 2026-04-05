@@ -105,11 +105,23 @@ void ConstraintSolver::build_contact_constraints(
             c.effective_mass_t2 = effective_mass(ea.rigidbody, eb.rigidbody,
                                                   c.ra, c.rb, c.tangent2);
 
-            // Baumgarte bias: β/dt * max(0, depth - slop)
+            // FIX: Baumgarte dt_inv must match the outer tick rate (60 Hz),
+            // not the substep rate (240 Hz).
+            //
+            // The solver runs once per outer tick after all 4 substeps have
+            // completed.  The original code used dt_inv = 240.0, which is 4×
+            // too large.  The Baumgarte bias injects a position-correction
+            // velocity of β * dt_inv * penetration_depth per iteration.  At
+            // 240 Hz with β=0.2 and a typical penetration depth of 0.05 m the
+            // bias is 0.2 * 240 * 0.05 = 2.4 m/s of correction per iteration,
+            // compounded over 10 iterations → catastrophic energy injection
+            // that sends stacked entities to thousands of metres.
+            //
+            // At 60 Hz the bias is 0.2 * 60 * 0.05 = 0.6 m/s — well within
+            // stable range and matching the documented spec (Brief §4.1).
+            FpVel dt_inv = FpVel::from_float(60.0f);   // outer tick: 60 Hz
             FpVel excess = cp.depth - params_.baumgarte_slop;
             if (excess.raw < 0) excess = FpVel::zero();
-            // Use dt_inv ≈ 1/substep_dt = 240 Hz
-            FpVel dt_inv = FpVel::from_float(240.0f);
             c.bias = params_.baumgarte_beta * dt_inv * excess;
 
             // Restitution: only if relative velocity > slop
@@ -214,12 +226,11 @@ void ConstraintSolver::solve_contact_velocity(ContactConstraint& c,
     FpVel vt2 = rel_vel.dot(c.tangent2);
     FpVel lambda_t2_delta = (-vt2) * c.effective_mass_t2;
     FpVel old_t2 = c.lambda_t2;
-    // 2D friction cone: |λ_t| ≤ μ * λ_n (both tangent components together)
-    FpVel total_t_sq = c.lambda_t1 * c.lambda_t1 + c.lambda_t2 * c.lambda_t2;
-    FpVel max_t_sq   = max_friction * max_friction;
     c.lambda_t2 = fp_clamp(old_t2 + lambda_t2_delta, -max_friction, max_friction);
-    // Rescale if combined exceeds cone
-    FpVel combined_t = c.lambda_t1 * c.lambda_t1 + c.lambda_t2 * c.lambda_t2;
+
+    // 2D friction cone: rescale both tangent components if combined exceeds μ*λ_n
+    FpVel max_t_sq    = max_friction * max_friction;
+    FpVel combined_t  = c.lambda_t1 * c.lambda_t1 + c.lambda_t2 * c.lambda_t2;
     if (combined_t > max_t_sq && max_t_sq.raw > 0) {
         FpVel scale = max_friction / fp_sqrt(combined_t);
         c.lambda_t1 = c.lambda_t1 * scale;
@@ -236,26 +247,24 @@ void ConstraintSolver::solve_contact_velocity(ContactConstraint& c,
 // Solve joint: spring-damper style angular constraint
 // ---------------------------------------------------------------------------
 void ConstraintSolver::solve_joint_velocity(JointConstraint& j, Entity& ea) {
-    Skeleton& sk = ea.skeleton;
+    Skeleton& sk   = ea.skeleton;
     BoneState& bone = sk.bones[j.bone_index];
 
-    // Current angle
     FpVel angle = bone.joint_angle;
 
-    // Velocity at joint: simplified as angular vel component along joint axis
+    // Velocity along joint axis (scalar)
     FpVel av = ea.rigidbody.angular_velocity.dot(j.axis);
 
-    // Motor drive: proportional + derivative controller
-    FpVel stiffness  = FpVel::from_float(500.0f);  // N·m/rad
-    FpVel damping    = FpVel::from_float(40.0f);   // N·m·s/rad
-    FpVel angle_err  = bone.target_angle - angle;
-    FpVel torque     = stiffness * angle_err - damping * av;
+    // PD motor drive
+    FpVel stiffness = FpVel::from_float(500.0f);
+    FpVel damping   = FpVel::from_float(40.0f);
+    FpVel angle_err = bone.target_angle - angle;
+    FpVel torque    = stiffness * angle_err - damping * av;
 
-    // Clamp to max torque
     FpVel max_t = BONE_MAX_TORQUE[j.bone_index];
     torque = fp_clamp(torque, -max_t, max_t);
 
-    // Apply as angular impulse (torque * dt)
+    // Apply as angular impulse along the joint axis only.
     Vec3Vel ang_impulse = j.axis * (torque * SUBSTEP_DT);
     ea.rigidbody.angular_velocity += {
         ang_impulse.x * ea.rigidbody.inv_inertia_x,
@@ -263,14 +272,27 @@ void ConstraintSolver::solve_joint_velocity(JointConstraint& j, Entity& ea) {
         ang_impulse.z * ea.rigidbody.inv_inertia_z,
     };
 
-    // Hard joint limit enforcement
+    // FIX: Hard joint limit enforcement must only cancel velocity along the
+    // joint axis — not zero the entire angular_velocity vector.
+    //
+    // Original code:
+    //   if (angle < j.limit.min_angle && av < 0) angular_velocity = Vec3Vel::zero();
+    //   if (angle > j.limit.max_angle && av > 0) angular_velocity = Vec3Vel::zero();
+    //
+    // This wiped all rotation on the entity the moment any one of its 12
+    // joints hit a limit, which happens on every tick for a freshly spawned
+    // player whose joints all start at 0° with targets at 0°.  The sudden
+    // velocity destruction excited the constraint solver into injecting
+    // corrective impulses that compounded across 30 stacked players → explosion.
+    //
+    // Fix: project out only the violating axial component.  Other rotation
+    // axes (e.g. the pelvis tumbling while a knee is at its stop) are unaffected.
     if (j.joint_type == JointType::REVOLUTE) {
-        if (angle < j.limit.min_angle && av < FpVel::zero()) {
-            // Clamp to prevent motion past limit
-            ea.rigidbody.angular_velocity = Vec3Vel::zero();
-        }
-        if (angle > j.limit.max_angle && av > FpVel::zero()) {
-            ea.rigidbody.angular_velocity = Vec3Vel::zero();
+        if ((angle < j.limit.min_angle && av < FpVel::zero()) ||
+            (angle > j.limit.max_angle && av > FpVel::zero())) {
+            // Remove the component of angular_velocity along the joint axis.
+            FpVel proj = ea.rigidbody.angular_velocity.dot(j.axis);
+            ea.rigidbody.angular_velocity -= j.axis * proj;
         }
     }
 }
