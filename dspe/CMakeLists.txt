@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.26)
 project(DSPE VERSION 1.1 LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.25)
 
 # ============================================================================
 # C++20 requirement

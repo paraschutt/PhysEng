@@ -279,7 +279,7 @@ void InputSystem::apply(Entity& player_entity,
     }
 
     // Jump
-    if (input.jump && sk.left_foot_grounded || sk.right_foot_grounded) {
+    if (input.jump && (sk.left_foot_grounded || sk.right_foot_grounded)) {
         SkeletonController::apply_jump(player_entity,
                                        FpVel::from_float(400.0f)); // 400N impulse
         sk.anim_state = Skeleton::AnimState::JUMP;
