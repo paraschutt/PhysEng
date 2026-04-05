@@ -31,8 +31,26 @@ static const FpVel BALL_RADIUS  = FpVel::from_float(0.11f);    // m
 // Player constants
 static const FpVel PLAYER_MASS  = FpVel::from_float(75.0f);    // kg
 
-// Velocity clamp (safety)
-static const FpVel MAX_SPEED    = FpVel::from_float(200.0f);   // m/s absolute max
+// Velocity safety clamps.
+// These are solver-explosion backstops, not gameplay limits —
+// values are set well above any physically reachable quantity.
+static const FpVel MAX_SPEED    = FpVel::from_float(200.0f);   // m/s linear
+
+// MAX_ANGULAR_SPEED: safety clamp for RigidBody::angular_velocity (Q15.16, rad/s).
+//
+// Rationale for 50 rad/s (~8 rev/s):
+//   - Maximum realistic player tumble: ~5 rad/s
+//   - Brief specifies BallProperties::spin (Q8.24) up to ~100 rad/s, but that
+//     is a separate field.  RigidBody::angular_velocity drives orientation
+//     integration and the constraint solver; runaway values here cause the
+//     same int32 overflow path as MAX_SPEED, so the same int64 guard applies.
+//   - 50 rad/s is high enough to never interfere with gameplay while catching
+//     any solver explosion before it propagates to the position integrator.
+//
+// NOTE: (50 * 65536)^2 = ~1.07e13 — overflows int32 exactly like MAX_SPEED^2,
+// so clamp_angular_velocity must use the same int64 raw arithmetic as
+// clamp_velocity.  Do not use length_sq() / operator* for the threshold test.
+static const FpVel MAX_ANGULAR_SPEED = FpVel::from_float(50.0f); // rad/s
 
 // ---------------------------------------------------------------------------
 // RigidBody component
