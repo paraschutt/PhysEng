@@ -528,6 +528,144 @@ bool NarrowPhase::sphere_box(const Collider& cs, const Vec3Pos& ps,
 }
 
 // ============================================================================
+// capsule_box — closest point on capsule segment to box surface
+// ============================================================================
+bool NarrowPhase::capsule_box(const Collider& cc, const Vec3Pos& pc, const QuatVel& qc,
+                               const Collider& cb, const Vec3Pos& pb, const QuatVel& qb,
+                               ContactManifold& out) const {
+    // Transform capsule endpoints into box local space.
+    Vec3Vel cap_centre = pos_to_vel(pc);
+    Vec3Vel box_centre = pos_to_vel(pb);
+
+    Vec3Vel base_l = pos_to_vel(cc.capsule.local_base);
+    Vec3Vel tip_l  = pos_to_vel(cc.capsule.local_tip);
+    Vec3Vel base_w = cap_centre + qc.rotate(base_l);
+    Vec3Vel tip_w  = cap_centre + qc.rotate(tip_l);
+
+    // Box half-extents in local space.
+    Vec3Vel he = pos_to_vel(Vec3Pos{cb.box.half_extents.x,
+                                     cb.box.half_extents.y,
+                                     cb.box.half_extents.z});
+    FpVel cap_r{cc.capsule.radius.raw << 8}; // Q24.8 → Q15.16
+
+    // Transform both endpoints into box local space.
+    auto to_local = [&](Vec3Vel w) -> Vec3Vel {
+        return qb.conjugate().rotate(w - box_centre);
+    };
+    Vec3Vel base_loc = to_local(base_w);
+    Vec3Vel tip_loc  = to_local(tip_w);
+
+    // Walk the segment in local space, clamp each point to the box surface,
+    // and find the point on the segment closest to the box.
+    // Approach: parametric search — test base (t=0), tip (t=1), and for each
+    // axis the t where the segment crosses each face slab.  The closest
+    // clamped pair determines penetration.
+    //
+    // For each candidate t, the closest point on the box is clamp(seg(t), -he, he).
+    // We want the t that minimises |seg(t) - clamp(seg(t), -he, he)|.
+    // For the ground plane (large flat box) this reduces to: find the lowest
+    // y-coordinate point on the segment, which is simply min(base_y, tip_y).
+
+    // Collect candidate t values: endpoints + axis-crossing ts.
+    FpVel candidates[8];
+    int   nc = 0;
+    candidates[nc++] = FpVel::zero();   // base
+    candidates[nc++] = FpVel::one();    // tip
+
+    Vec3Vel seg = tip_loc - base_loc;   // direction in local space
+
+    // For each axis, find t where segment crosses each face slab boundary.
+    auto add_crossing = [&](FpVel seg_c, FpVel base_c, FpVel face) {
+        if (seg_c.raw == 0) return;
+        // t = (face - base_c) / seg_c
+        int64_t num = static_cast<int64_t>((face - base_c).raw) << 16;
+        FpVel t{static_cast<int32_t>(num / seg_c.raw)};
+        if (t.raw > 0 && t < FpVel::one())
+            candidates[nc++] = t;
+    };
+    add_crossing(seg.x, base_loc.x, -he.x);
+    add_crossing(seg.x, base_loc.x,  he.x);
+    add_crossing(seg.y, base_loc.y, -he.y);
+    add_crossing(seg.y, base_loc.y,  he.y);
+    add_crossing(seg.z, base_loc.z, -he.z);
+    add_crossing(seg.z, base_loc.z,  he.z);
+
+    // Evaluate all candidates; keep the one with smallest gap.
+    FpVel   best_dist2 = FpVel::max_val();
+    FpVel   best_depth = FpVel::zero();
+    Vec3Vel best_normal_local{};
+    Vec3Vel best_seg_pt{};
+    Vec3Vel best_box_pt{};
+    bool    found = false;
+
+    for (int i = 0; i < nc; ++i) {
+        FpVel t = fp_clamp(candidates[i], FpVel::zero(), FpVel::one());
+        Vec3Vel seg_loc = base_loc + seg * t;
+
+        Vec3Vel clamped = {
+            fp_clamp(seg_loc.x, -he.x, he.x),
+            fp_clamp(seg_loc.y, -he.y, he.y),
+            fp_clamp(seg_loc.z, -he.z, he.z),
+        };
+
+        Vec3Vel diff_loc = seg_loc - clamped;
+        FpVel   d2       = diff_loc.length_sq();
+        FpVel   cap_r2   = cap_r * cap_r;
+
+        if (d2 > cap_r2) continue; // no contact at this t
+
+        // Compute contact normal and depth.
+        FpVel   dist = fp_sqrt(d2);
+        Vec3Vel normal_local;
+        FpVel   depth;
+
+        if (dist.raw == 0) {
+            // Capsule axis point is inside the box — push out along least-penetrating axis.
+            FpVel dx = he.x - seg_loc.x.abs();
+            FpVel dy = he.y - seg_loc.y.abs();
+            FpVel dz = he.z - seg_loc.z.abs();
+            if (dx < dy && dx < dz) {
+                normal_local = { seg_loc.x.raw >= 0 ? FpVel::one() : -FpVel::one(), {}, {} };
+                depth = cap_r + dx;
+            } else if (dy < dz) {
+                normal_local = { {}, seg_loc.y.raw >= 0 ? FpVel::one() : -FpVel::one(), {} };
+                depth = cap_r + dy;
+            } else {
+                normal_local = { {}, {}, seg_loc.z.raw >= 0 ? FpVel::one() : -FpVel::one() };
+                depth = cap_r + dz;
+            }
+        } else {
+            normal_local = diff_loc / dist;
+            depth = cap_r - dist;
+        }
+
+        // Keep deepest penetrating contact (most negative gap = most urgent).
+        if (!found || d2 < best_dist2) {
+            best_dist2        = d2;
+            best_depth        = depth;
+            best_normal_local = normal_local;
+            best_seg_pt       = seg_loc;
+            best_box_pt       = clamped;
+            found             = true;
+        }
+    }
+
+    if (!found) return false;
+
+    out.clear();
+    ContactPoint cp;
+    cp.normal      = qb.rotate(best_normal_local);
+    cp.depth       = best_depth;
+    // world-space contact points
+    cp.world_pos_a = box_centre + qb.rotate(best_seg_pt) - cp.normal * cap_r;
+    cp.world_pos_b = box_centre + qb.rotate(best_box_pt);
+    cp.is_new      = true;
+    out.points[0]  = cp;
+    out.count      = 1;
+    return true;
+}
+
+// ============================================================================
 // Main dispatch
 // ============================================================================
 
@@ -574,6 +712,15 @@ bool NarrowPhase::generate_contact(const Entity& ea, const Entity& eb,
     }
     if (ca.shape_type == ShapeType::BOX && cb.shape_type == ShapeType::SPHERE) {
         bool hit = sphere_box(cb, pb, ca, pa, qa, out);
+        if (hit) out.points[0].normal = -out.points[0].normal;
+        return hit;
+    }
+    // Capsule vs box — player bodies against ground plane and goalposts.
+    if (ca.shape_type == ShapeType::CAPSULE && cb.shape_type == ShapeType::BOX) {
+        return capsule_box(ca, pa, qa, cb, pb, qb, out);
+    }
+    if (ca.shape_type == ShapeType::BOX && cb.shape_type == ShapeType::CAPSULE) {
+        bool hit = capsule_box(cb, pb, qb, ca, pa, qa, out);
         if (hit) out.points[0].normal = -out.points[0].normal;
         return hit;
     }
