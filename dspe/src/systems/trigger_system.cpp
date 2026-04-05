@@ -1,7 +1,7 @@
 // ============================================================================
 // DSPE Trigger System Implementation
 // ============================================================================
-#include "dspe/systems/trigger_system.h"
+#include "systems/trigger_system.h"
 
 namespace dspe {
 

@@ -1,8 +1,8 @@
 // ============================================================================
 // DSPE Integrator Implementation
 // ============================================================================
-#include "dspe/systems/integrator.h"
-#include "dspe/systems/skeleton.h"
+#include "systems/integrator.h"
+#include "systems/skeleton.h"
 #include <algorithm>
 #include <cstdlib>
 
@@ -184,7 +184,7 @@ void Integrator::integrate_entity(Entity& e,
 
     // ─── Safety clamps ───────────────────────────────────────────────────────
     clamp_velocity(e);
-    clamp_angular_velocity(e);
+    //clamp_angular_velocity(e);
     apply_ground_clamp(e);
 }
 
