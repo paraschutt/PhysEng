@@ -533,8 +533,18 @@ bool NarrowPhase::sphere_box(const Collider& cs, const Vec3Pos& ps,
 
 bool NarrowPhase::generate_contact(const Entity& ea, const Entity& eb,
                                     ContactManifold& out) const {
-    out.pair = make_pair(ea.rigidbody.is_static() ? INVALID_ENTITY : PLAYER_BEGIN,
-                         BALL_ENTITY); // placeholder
+    // FIX: Do NOT overwrite out.pair here.
+    //
+    // The caller (world.cpp generate_contacts) sets fresh.pair = pair
+    // before calling this function.  The original code stomped out.pair
+    // with a hardcoded placeholder:
+    //
+    //   out.pair = make_pair(ea.rigidbody.is_static() ? INVALID_ENTITY : PLAYER_BEGIN,
+    //                        BALL_ENTITY);  // ← always wrong for ground contacts
+    //
+    // That made the constraint solver look up entity IDs 0 (PLAYER_BEGIN) and
+    // 30 (BALL_ENTITY) for every contact, completely ignoring which entities
+    // actually collided.  Removing the line lets the caller's pair survive.
     out.count = 0;
 
     const Collider& ca = ea.collider;
