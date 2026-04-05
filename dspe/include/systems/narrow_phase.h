@@ -96,6 +96,14 @@ public:
                          const Collider& cb, const Vec3Pos& pb,
                          ContactManifold& out) const;
 
+    // capsule_box — player capsule vs static ground/goalpost box.
+    // Required for player↔ground contact: the original dispatch table had no
+    // CAPSULE+BOX path, so every player-ground pair returned false from
+    // generate_contact(), leaving players with no ground support or friction.
+    bool capsule_box    (const Collider& cc, const Vec3Pos& pc, const QuatVel& qc,
+                         const Collider& cb, const Vec3Pos& pb, const QuatVel& qb,
+                         ContactManifold& out) const;
+
 private:
     // GJK: compute closest points between two convex shapes
     // Returns false if shapes overlap (call EPA for depth)
