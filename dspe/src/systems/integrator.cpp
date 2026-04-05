@@ -184,7 +184,7 @@ void Integrator::integrate_entity(Entity& e,
 
     // ─── Safety clamps ───────────────────────────────────────────────────────
     clamp_velocity(e);
-    //clamp_angular_velocity(e);
+    clamp_angular_velocity(e);
     apply_ground_clamp(e);
 }
 
@@ -211,10 +211,10 @@ void Integrator::clamp_velocity(Entity& e) {
     int64_t vx = rb.velocity.x.raw;
     int64_t vy = rb.velocity.y.raw;
     int64_t vz = rb.velocity.z.raw;
-    int64_t speed_sq_raw2 = vx*vx + vy*vy + vz*vz;   // units: raw^2 (not Q15.16)
+    int64_t speed_sq_raw2 = vx*vx + vy*vy + vz*vz;
     int64_t max_raw       = MAX_SPEED.raw;
-    int64_t max_sq_raw2   = max_raw * max_raw;         // stays in int64, no overflow
-    if (speed_sq_raw2 <= max_sq_raw2) return;          // common case: nothing to do
+    int64_t max_sq_raw2   = max_raw * max_raw;
+    if (speed_sq_raw2 <= max_sq_raw2) return;  // common case: nothing to do
 
     // Compute speed in raw units using integer sqrt (Newton-Raphson on int64)
     int64_t speed_raw = max_raw; // initial guess = MAX_SPEED
@@ -227,10 +227,41 @@ void Integrator::clamp_velocity(Entity& e) {
     if (speed_raw == 0) return;
 
     // Scale each component: v_new = v * (MAX_SPEED.raw / speed_raw)
-    // Both are in the same raw units so the ratio is dimensionless
     rb.velocity.x.raw = (int32_t)(vx * max_raw / speed_raw);
     rb.velocity.y.raw = (int32_t)(vy * max_raw / speed_raw);
     rb.velocity.z.raw = (int32_t)(vz * max_raw / speed_raw);
+}
+
+void Integrator::clamp_angular_velocity(Entity& e) {
+    RigidBody& rb = e.rigidbody;
+
+    // Same overflow hazard as clamp_velocity:
+    // MAX_ANGULAR_SPEED = 50 rad/s; in Q15.16 raw = 50 * 65536 = 3,276,800.
+    // 3,276,800^2 = ~1.07e13 — overflows int32 but fits int64 comfortably.
+    // Must use int64 raw arithmetic throughout; never call length_sq() here.
+    int64_t wx = rb.angular_velocity.x.raw;
+    int64_t wy = rb.angular_velocity.y.raw;
+    int64_t wz = rb.angular_velocity.z.raw;
+    int64_t speed_sq_raw2 = wx*wx + wy*wy + wz*wz;
+    int64_t max_raw       = MAX_ANGULAR_SPEED.raw;
+    int64_t max_sq_raw2   = max_raw * max_raw;
+    if (speed_sq_raw2 <= max_sq_raw2) return;  // common case: nothing to do
+
+    // Newton-Raphson integer sqrt on int64 — identical to clamp_velocity.
+    int64_t speed_raw = max_raw; // initial guess = MAX_ANGULAR_SPEED
+    for (int i = 0; i < 16; ++i) {
+        if (speed_raw == 0) break;
+        int64_t next = (speed_raw + speed_sq_raw2 / speed_raw) >> 1;
+        if (next >= speed_raw) break;
+        speed_raw = next;
+    }
+    if (speed_raw == 0) return;
+
+    // Rescale to lie exactly on the MAX_ANGULAR_SPEED surface,
+    // preserving the direction of angular_velocity.
+    rb.angular_velocity.x.raw = (int32_t)(wx * max_raw / speed_raw);
+    rb.angular_velocity.y.raw = (int32_t)(wy * max_raw / speed_raw);
+    rb.angular_velocity.z.raw = (int32_t)(wz * max_raw / speed_raw);
 }
 
 // ============================================================================
@@ -247,17 +278,11 @@ void InputSystem::apply(Entity& player_entity,
     Skeleton&  sk = player_entity.skeleton;
 
     // Friction circle: a_max = μ * g
-    // Use the ground surface kinetic_mu, then apply wetness.
-    // Surface kinetic_mu is taken from the ground material (MAT_DRY_GRASS base)
-    // and modulated by wetness. At full wet (wetness=0), factor=0.5:
-    //   0.60 * 0.5 = 0.30  (too low vs brief's 0.35 for wet grass)
-    // Use MAT_WET_GRASS directly when surface is predominantly wet.
-    // Threshold: wetness < 0.5 → use wet grass material directly.
     MaterialId surface_mat = (surface.wetness < FpVel::from_float(0.5f))
                              ? MAT_WET_GRASS : MAT_DRY_GRASS;
     FpVel base_mu = get_material(surface_mat).kinetic_mu;
     FpVel mu      = surface.apply_wetness(base_mu);
-    FpVel a_max   = mu * GRAVITY;  // m/s²
+    FpVel a_max   = mu * GRAVITY;
 
     // Desired acceleration toward target velocity
     Vec3Vel current_vel_xz = { rb.velocity.x, FpVel::zero(), rb.velocity.z };
@@ -278,14 +303,14 @@ void InputSystem::apply(Entity& player_entity,
         rb.apply_force(force);
     }
 
-    // Jump
+    // Jump — parentheses fix: was `input.jump && sk.left_foot_grounded || sk.right_foot_grounded`
+    // which fired whenever right foot was grounded regardless of jump input.
     if (input.jump && (sk.left_foot_grounded || sk.right_foot_grounded)) {
         SkeletonController::apply_jump(player_entity,
-                                       FpVel::from_float(400.0f)); // 400N impulse
+                                       FpVel::from_float(400.0f));
         sk.anim_state = Skeleton::AnimState::JUMP;
     }
 
-    // Tackle: handled by skeleton controller via animation state
     if (input.tackle) {
         sk.anim_state = Skeleton::AnimState::TACKLE;
     }
