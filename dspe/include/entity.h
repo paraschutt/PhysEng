@@ -45,7 +45,18 @@ enum ComponentFlag : uint32_t {
     // Archetype shortcuts
     ARCH_PLAYER = COMP_RIGIDBODY | COMP_COLLIDER | COMP_SKELETON,
     ARCH_BALL   = COMP_RIGIDBODY | COMP_COLLIDER | COMP_BALL_PROPERTIES | COMP_CCD,
-    ARCH_STATIC = COMP_COLLIDER  | COMP_STATIC,
+
+    // FIX: ARCH_STATIC must include COMP_RIGIDBODY.
+    //
+    // Static bodies carry a RigidBody component (with inv_mass = 0 so they
+    // cannot move), and they participate in narrow-phase contact generation
+    // and the constraint solver as immovable surfaces.  Without this flag
+    // every function that gates on has(COMP_RIGIDBODY) — generate_contacts()
+    // in world.cpp and build_contact_constraints() in constraint_solver.cpp —
+    // silently drops ball↔ground and player↔ground candidate pairs, making
+    // the ball fall straight through the pitch.
+    ARCH_STATIC = COMP_RIGIDBODY | COMP_COLLIDER | COMP_STATIC,
+
     ARCH_TRIGGER= COMP_TRIGGER,
 };
 
