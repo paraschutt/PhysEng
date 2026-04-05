@@ -64,8 +64,18 @@ public:
     // Applies via constraint solver, but clamp here as safety measure
     static void apply_ground_clamp(Entity& e);
 
-    // Velocity safety clamp (prevent solver explosions)
+    // Linear velocity safety clamp (prevent solver explosions).
+    // Uses int64 raw arithmetic — MAX_SPEED² overflows int32 in Q15.16.
     static void clamp_velocity(Entity& e);
+
+    // Angular velocity safety clamp (prevent solver explosions).
+    // Mirrors clamp_velocity exactly: uses int64 raw arithmetic because
+    // MAX_ANGULAR_SPEED² likewise overflows int32 in Q15.16.
+    // Clamps RigidBody::angular_velocity to MAX_ANGULAR_SPEED (50 rad/s).
+    // Note: BallProperties::spin (Q8.24) is a separate field and is NOT
+    // clamped here — it is managed by ForceAccumulator::accumulate_ball
+    // via spin_decay_torque.
+    static void clamp_angular_velocity(Entity& e);
 
 private:
     // Single entity Verlet integration (one substep)
