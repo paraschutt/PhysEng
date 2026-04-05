@@ -2,7 +2,7 @@
 // DSPE CCD — Swept Sphere Implementation
 // Detects tunnelling: ball at 30 m/s, substep 4.166ms → 0.125m/substep
 // ============================================================================
-#include "systems/ccd.h"
+#include "dspe/systems/ccd.h"
 #include <algorithm>
 #include <limits>
 #include <cmath>
@@ -150,8 +150,9 @@ FpVel ContinuousCollisionDetection::swept_sphere_box(
     Vec3Vel normal{};
 
     auto test_axis = [&](FpVel origin, FpVel vel, FpVel lo, FpVel hi, int axis) -> bool {
-        FpVel eps = FpVel::from_float(1e-6f);
-        if (vel.abs() < eps) {
+        // Guard: if velocity along this axis is zero, sphere either
+        // misses entirely or is already inside the slab
+        if (vel.raw == 0) {
             return (origin >= lo && origin <= hi);
         }
         FpVel inv = FpVel::one() / vel;

@@ -5,7 +5,7 @@
 //                  player boot (vs ball), player boot (vs player), goalpost
 // Wet modifier: multiplies static_mu and kinetic_mu by wetness_factor [0.5, 1.0]
 // ============================================================================
-#include "fixed_point.h"
+#include "dspe/fixed_point.h"
 #include <cstdint>
 #include <array>
 
@@ -101,6 +101,6 @@ struct SurfaceState {
 };
 
 // needs math_types.h for Vec3Vel
-#include "math_types.h"
+#include "dspe/math_types.h"
 
 } // namespace dspe

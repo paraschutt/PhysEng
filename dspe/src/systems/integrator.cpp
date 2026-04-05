@@ -1,13 +1,10 @@
 // ============================================================================
 // DSPE Integrator Implementation
 // ============================================================================
-#include "systems/integrator.h"
-#include "systems/skeleton.h"
+#include "dspe/systems/integrator.h"
+#include "dspe/systems/skeleton.h"
 #include <algorithm>
 #include <cstdlib>
-#ifdef DSPE_DEBUG_INTEGRATE
-#include <cstdio>
-#endif
 
 namespace dspe {
 
@@ -154,19 +151,10 @@ void Integrator::integrate_entity(Entity& e,
                                    FpVel dt) {
     RigidBody& rb = e.rigidbody;
 
-    #ifdef DSPE_DEBUG_INTEGRATE
-    printf("[DBG integrate] dt.raw=%d  v.y.raw=%d  a.y.raw=%d\n",
-           dt.raw, rb.velocity.y.raw, rb.acceleration.y.raw);
-    #endif
-
     // ─── Step 1: Half-step velocity  ────────────────────────────────────────
     // v(t + dt/2) = v(t) + 0.5 * a(t) * dt
     FpVel half_dt = dt >> 1;  // dt/2 in Q15.16
     rb.velocity = vel_add_acc_dt(rb.velocity, rb.acceleration, half_dt);
-
-    #ifdef DSPE_DEBUG_INTEGRATE
-    printf("[DBG step1] half_dt.raw=%d  v.y.raw=%d\n", half_dt.raw, rb.velocity.y.raw);
-    #endif
 
     // ─── Step 2: Full-step position  ────────────────────────────────────────
     // x(t + dt) = x(t) + v(t + dt/2) * dt
@@ -196,35 +184,53 @@ void Integrator::integrate_entity(Entity& e,
 
     // ─── Safety clamps ───────────────────────────────────────────────────────
     clamp_velocity(e);
+    clamp_angular_velocity(e);
     apply_ground_clamp(e);
 }
 
 void Integrator::apply_ground_clamp(Entity& e) {
     RigidBody& rb = e.rigidbody;
-    // Ground is at y=0; collider radius offsets the clamp
-    FpPos ground_y = FpPos::zero();
-    if (e.has(COMP_COLLIDER)) {
-        if (e.collider.shape_type == ShapeType::SPHERE) {
-            ground_y = e.collider.sphere.radius;
-        } else if (e.collider.shape_type == ShapeType::CAPSULE) {
-            ground_y = e.collider.capsule.radius;
-        }
-    }
-    if (rb.position.y < ground_y) {
-        rb.position.y = ground_y;
-        if (rb.velocity.y.raw < 0) rb.velocity.y = FpVel::zero();
+    // Emergency backstop ONLY — fires when entity falls more than 5m below ground.
+    // Normal ground contact (including bouncing) is handled by the constraint solver
+    // via sphere_box / capsule_box contact manifolds.
+    // DO NOT reset position to ball_radius here — that puts the ball at exactly
+    // dist == rs, which the narrow phase misses due to fixed-point rounding.
+    FpPos deep_threshold = FpPos::from_float(-5.0f);
+    if (rb.position.y < deep_threshold) {
+        rb.position.y = FpPos::zero();
+        rb.velocity.y = FpVel::zero();
     }
 }
 
 void Integrator::clamp_velocity(Entity& e) {
     RigidBody& rb = e.rigidbody;
-    FpVel speed_sq = rb.velocity.length_sq();
-    FpVel max_sq   = MAX_SPEED * MAX_SPEED;
-    if (speed_sq > max_sq) {
-        FpVel speed = fp_sqrt(speed_sq);
-        if (speed.raw == 0) return;
-        rb.velocity = rb.velocity * (MAX_SPEED / speed);
+    // BUG GUARD: Q15.16 cannot represent 200^2 = 40000 (max ~32767).
+    // MAX_SPEED.raw = 13,107,200; squaring via operator* overflows int32_t to
+    // a negative number, making the clamp trigger on every entity every substep.
+    // Fix: compare speed_sq against max_sq using int64 raw arithmetic.
+    int64_t vx = rb.velocity.x.raw;
+    int64_t vy = rb.velocity.y.raw;
+    int64_t vz = rb.velocity.z.raw;
+    int64_t speed_sq_raw2 = vx*vx + vy*vy + vz*vz;   // units: raw^2 (not Q15.16)
+    int64_t max_raw       = MAX_SPEED.raw;
+    int64_t max_sq_raw2   = max_raw * max_raw;         // stays in int64, no overflow
+    if (speed_sq_raw2 <= max_sq_raw2) return;          // common case: nothing to do
+
+    // Compute speed in raw units using integer sqrt (Newton-Raphson on int64)
+    int64_t speed_raw = max_raw; // initial guess = MAX_SPEED
+    for (int i = 0; i < 16; ++i) {
+        if (speed_raw == 0) break;
+        int64_t next = (speed_raw + speed_sq_raw2 / speed_raw) >> 1;
+        if (next >= speed_raw) break;
+        speed_raw = next;
     }
+    if (speed_raw == 0) return;
+
+    // Scale each component: v_new = v * (MAX_SPEED.raw / speed_raw)
+    // Both are in the same raw units so the ratio is dimensionless
+    rb.velocity.x.raw = (int32_t)(vx * max_raw / speed_raw);
+    rb.velocity.y.raw = (int32_t)(vy * max_raw / speed_raw);
+    rb.velocity.z.raw = (int32_t)(vz * max_raw / speed_raw);
 }
 
 // ============================================================================
@@ -240,9 +246,17 @@ void InputSystem::apply(Entity& player_entity,
     RigidBody& rb = player_entity.rigidbody;
     Skeleton&  sk = player_entity.skeleton;
 
-    // Friction circle: a_max = μ * g  (player can only push as hard as ground allows)
-    FpVel mu      = surface.apply_wetness(
-                        get_material(MAT_DRY_GRASS).kinetic_mu);
+    // Friction circle: a_max = μ * g
+    // Use the ground surface kinetic_mu, then apply wetness.
+    // Surface kinetic_mu is taken from the ground material (MAT_DRY_GRASS base)
+    // and modulated by wetness. At full wet (wetness=0), factor=0.5:
+    //   0.60 * 0.5 = 0.30  (too low vs brief's 0.35 for wet grass)
+    // Use MAT_WET_GRASS directly when surface is predominantly wet.
+    // Threshold: wetness < 0.5 → use wet grass material directly.
+    MaterialId surface_mat = (surface.wetness < FpVel::from_float(0.5f))
+                             ? MAT_WET_GRASS : MAT_DRY_GRASS;
+    FpVel base_mu = get_material(surface_mat).kinetic_mu;
+    FpVel mu      = surface.apply_wetness(base_mu);
     FpVel a_max   = mu * GRAVITY;  // m/s²
 
     // Desired acceleration toward target velocity

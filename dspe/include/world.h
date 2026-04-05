@@ -15,16 +15,16 @@
 //   8. SleepSystem (sleep/wake thresholds)
 //   9. EventSystem dispatch
 // ============================================================================
-#include "components.h"
-#include "systems/integrator.h"
-#include "systems/broad_phase.h"
-#include "systems/narrow_phase.h"
-#include "systems/constraint_solver.h"
-#include "systems/ccd.h"
-#include "systems/skeleton.h"
-#include "systems/sleep_system.h"
-#include "systems/trigger_system.h"
-#include "systems/event_system.h"
+#include "dspe/components.h"
+#include "dspe/systems/integrator.h"
+#include "dspe/systems/broad_phase.h"
+#include "dspe/systems/narrow_phase.h"
+#include "dspe/systems/constraint_solver.h"
+#include "dspe/systems/ccd.h"
+#include "dspe/systems/skeleton.h"
+#include "dspe/systems/sleep_system.h"
+#include "dspe/systems/trigger_system.h"
+#include "dspe/systems/event_system.h"
 #include <array>
 #include <vector>
 #include <functional>

@@ -1,7 +1,7 @@
 // ============================================================================
 // DSPE World Implementation
 // ============================================================================
-#include "world.h"
+#include "dspe/world.h"
 #include <algorithm>
 #include <cstdio>
 
@@ -14,6 +14,14 @@ World::World(const WorldConfig& config)
     : solver_(config.solver), surface_(config.surface) {
     manifolds_.reserve(400);
     trigger_system_.init_pitch_triggers(entities_, config.pitch);
+
+    // Create implicit ground plane: a large static box at y = -0.5m (half-extent 0.5m)
+    // so its top face is exactly at y = 0. Ball resting on ground touches at ball_radius.
+    create_static_box(
+        { FpPos::zero(), FpPos::from_float(-0.5f), FpPos::zero() },
+        { FpPos::from_float(200.0f), FpPos::from_float(0.5f), FpPos::from_float(200.0f) },
+        MAT_DRY_GRASS
+    );
 }
 
 // ============================================================================
@@ -255,24 +263,31 @@ void World::run_substep(FpVel dt) {
     // 3. Velocity Verlet integration
     integrator_.substep(entities_, surface_, dt);
 
-    // 4. For each CCD hit, back-correct entity to TOI position
-    //    (advance to TOI, resolve normal impulse, continue for remaining dt)
+    // 4. CCD position correction
+    // The sweep ran BEFORE integration (ball was at sphere_start).
+    // Integrator placed ball at: sphere_start + velocity * dt.
+    // We want ball at:           sphere_start + velocity * dt * toi
+    //                          = (sphere_start + velocity*dt) - velocity*dt*(1-toi)
+    // So subtract (1-toi)*velocity*dt from the post-integration position.
+    // Leave velocity intact — the constraint solver applies proper restitution.
     for (auto& [eid, hit] : ccd_hits) {
         Entity& e = entities_[eid];
         if (!e.has(COMP_RIGIDBODY)) continue;
 
-        // Reflect velocity along contact normal (simplified CCD response)
-        // Full resolution is handled by constraint solver; here we prevent tunnelling
         FpVel vn = e.rigidbody.velocity.dot(hit.normal);
         if (vn.raw < 0) {
-            // Remove normal component (inelastic CCD correction)
-            e.rigidbody.velocity = e.rigidbody.velocity - hit.normal * vn;
-            // Reposition to TOI contact surface
-            e.rigidbody.position = {
-                FpPos{e.rigidbody.position.x.raw + (hit.contact_point.x * hit.toi).raw >> 8},
-                FpPos{e.rigidbody.position.y.raw + (hit.contact_point.y * hit.toi).raw >> 8},
-                FpPos{e.rigidbody.position.z.raw + (hit.contact_point.z * hit.toi).raw >> 8},
+            FpVel one_minus_toi = FpVel::one() - hit.toi;
+            // scale = (1-toi) * substep_dt  [Q15.16 * Q15.16 >> 16 = Q15.16]
+            int64_t scale_raw = (static_cast<int64_t>(one_minus_toi.raw) *
+                                 static_cast<int64_t>(dt.raw)) >> 16;
+            // correction per axis = velocity_axis * scale  [Q15.16] -> Q24.8 via >> 8
+            auto corr = [&](int32_t vel_raw) -> int32_t {
+                return static_cast<int32_t>(
+                    (static_cast<int64_t>(vel_raw) * scale_raw) >> (16 + 8));
             };
+            e.rigidbody.position.x.raw -= corr(e.rigidbody.velocity.x.raw);
+            e.rigidbody.position.y.raw -= corr(e.rigidbody.velocity.y.raw);
+            e.rigidbody.position.z.raw -= corr(e.rigidbody.velocity.z.raw);
         }
     }
 }

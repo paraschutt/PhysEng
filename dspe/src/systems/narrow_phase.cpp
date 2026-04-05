@@ -5,7 +5,7 @@
 // GJK: standard simplex-based distance algorithm
 // EPA: polytope expansion for penetration depth
 // ============================================================================
-#include "systems/narrow_phase.h"
+#include "dspe/systems/narrow_phase.h"
 #include <algorithm>
 #include <array>
 
@@ -50,7 +50,9 @@ void NarrowPhase::closest_points_segment_segment(
 
     FpVel s, t;
 
-    FpVel eps = FpVel::from_float(1e-6f);
+    // Epsilon for degenerate segment detection.
+    // 1e-6 in Q15.16 rounds to 0 raw — use 1 raw unit (≈1.5e-5 m) instead.
+    FpVel eps{1};
 
     if (a <= eps && e <= eps) {
         // Both degenerate (points)
@@ -489,7 +491,10 @@ bool NarrowPhase::sphere_box(const Collider& cs, const Vec3Pos& ps,
     FpVel rs{(cs.sphere.radius.raw << 8)};
     FpVel   rs2 = rs * rs;
 
-    if (dist2 >= rs2) return false;
+    // Use strict > so that dist == rs (exact touching) also registers as contact.
+    // With >= the fixed-point rounding causes dist2 == rs2 exactly when ball
+    // sits at its resting position, silently missing the contact.
+    if (dist2 > rs2) return false;
 
     out.clear();
     ContactPoint cp;

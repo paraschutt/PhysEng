@@ -39,9 +39,14 @@ int32_t BroadPhase::alloc_node() {
 
 void BroadPhase::free_node(int32_t idx) {
     assert(idx >= 0 && idx < AABB_TREE_CAPACITY);
-    nodes_[idx].child[0] = free_list_;
+    // Clear all pointers so stale traversals terminate immediately
+    nodes_[idx].child[0] = NULL_NODE;
+    nodes_[idx].child[1] = NULL_NODE;
+    nodes_[idx].parent   = NULL_NODE;
     nodes_[idx].height   = -1;
     nodes_[idx].entity   = INVALID_ENTITY;
+    // Push onto free list
+    nodes_[idx].child[0] = free_list_;
     free_list_           = idx;
     --node_count_;
 }
@@ -180,13 +185,23 @@ void BroadPhase::update(EntityId id, const AABB& tight_aabb) {
     }
 
     remove_leaf(leaf);
+
+    // CRITICAL: clear stale parent pointer left by remove_leaf.
+    // remove_leaf disconnects the leaf but does not clear its parent field.
+    // insert_leaf calls fix_aabbs(new_parent) which walks parent pointers —
+    // a stale pointer here creates a cycle and an infinite loop.
+    nodes_[leaf].parent   = NULL_NODE;
+    nodes_[leaf].child[0] = NULL_NODE;
+    nodes_[leaf].child[1] = NULL_NODE;
+
     nodes_[leaf].aabb   = tight_aabb.inflated(AABB_FAT_MARGIN);
     nodes_[leaf].height = 0;
     insert_leaf(leaf);
 }
 
 void BroadPhase::fix_heights(int32_t idx) {
-    while (idx != NULL_NODE) {
+    int guard = 0;
+    while (idx != NULL_NODE && ++guard < AABB_TREE_CAPACITY) {
         int32_t c0 = nodes_[idx].child[0];
         int32_t c1 = nodes_[idx].child[1];
         int32_t h0 = (c0 != NULL_NODE) ? nodes_[c0].height : -1;
@@ -197,7 +212,8 @@ void BroadPhase::fix_heights(int32_t idx) {
 }
 
 void BroadPhase::fix_aabbs(int32_t idx) {
-    while (idx != NULL_NODE && !nodes_[idx].is_leaf()) {
+    int guard = 0;
+    while (idx != NULL_NODE && !nodes_[idx].is_leaf() && ++guard < AABB_TREE_CAPACITY) {
         int32_t c0 = nodes_[idx].child[0];
         int32_t c1 = nodes_[idx].child[1];
         if (c0 != NULL_NODE && c1 != NULL_NODE)
@@ -233,6 +249,7 @@ void BroadPhase::query_pairs(std::vector<EntityPair>& out_pairs) const {
 void BroadPhase::collect_pairs(int32_t nodeA, int32_t nodeB,
                                 std::vector<EntityPair>& out) const {
     if (nodeA == NULL_NODE || nodeB == NULL_NODE) return;
+    if (nodeA == nodeB) return;  // never test a node against itself
     if (!nodes_[nodeA].aabb.overlaps(nodes_[nodeB].aabb)) return;
 
     // Both leaves: found a candidate pair

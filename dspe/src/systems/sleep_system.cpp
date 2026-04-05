@@ -1,7 +1,7 @@
 // ============================================================================
 // DSPE Sleep System Implementation
 // ============================================================================
-#include "systems/sleep_system.h"
+#include "dspe/systems/sleep_system.h"
 #include <cstdlib>
 
 namespace dspe {

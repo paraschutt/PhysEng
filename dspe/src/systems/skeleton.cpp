@@ -1,8 +1,8 @@
 // ============================================================================
 // DSPE Skeleton Controller Implementation
 // ============================================================================
-#include "systems/skeleton.h"
-#include "systems/sleep_system.h"
+#include "dspe/systems/skeleton.h"
+#include "dspe/systems/sleep_system.h"
 #include <algorithm>
 
 namespace dspe {
