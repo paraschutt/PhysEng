@@ -1,0 +1,123 @@
+name: APC Determinism Verification
+
+on:
+  push:
+    branches: [main, develop]
+    paths: ['src/**', 'cmake/**', 'tests/**']
+  pull_request:
+    branches: [main]
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  determinism-matrix:
+    strategy:
+      fail-fast: false  # Run ALL platforms even if one fails
+      matrix:
+        include:
+          - name: "Windows-MSVC"
+            os: windows-latest
+            compiler: msvc
+            cmake_gen: "Visual Studio 17 2022"
+            artifact: windows-msvc
+          - name: "Linux-GCC"
+            os: ubuntu-22.04
+            compiler: gcc
+            cc: gcc-12
+            cxx: g++-12
+            artifact: linux-gcc
+          - name: "Linux-Clang"
+            os: ubuntu-22.04
+            compiler: clang
+            cc: clang-15
+            cxx: clang++-15
+            artifact: linux-clang
+          - name: "macOS-Clang"
+            os: macos-latest
+            compiler: clang
+            artifact: macos-clang
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC (Linux)
+        if: matrix.compiler == 'gcc'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-12 g++-12
+
+      - name: Install Clang (Linux)
+        if: matrix.compiler == 'clang' && matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-15
+
+      - name: Configure CMake
+        run: |
+          mkdir build
+          cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DAPC_BUILD_TESTS=ON \
+            -DAPC_BUILD_DETERMINISM_TESTS=ON \
+            ${{ matrix.cc && format('-DCMAKE_C_COMPILER={0}', matrix.cc) || '' }} \
+            ${{ matrix.cxx && format('-DCMAKE_C_COMPILER={0}', matrix.cxx) || '' }} \
+            ${{ matrix.cmake_gen && format('-G "{0}"', matrix.cmake_gen) || '' }}
+
+      - name: Build
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} -j
+
+      - name: Run Determinism Test
+        run: |
+          cd build
+          ./bin/apc_det_trajectory > det_output_${{ matrix.artifact }}.txt 2>&1
+
+      - name: Extract Hash
+        run: |
+          cd build
+          HASH=$(grep "Final hash:" det_output_${{ matrix.artifact }}.txt | awk '{print $3}')
+          echo "HASH=$HASH" >> $GITHUB_ENV
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: det-results-${{ matrix.artifact }}
+          path: build/det_output_${{ matrix.artifact }}.txt
+
+      - name: Output Hash Summary
+        run: |
+          echo "### ${{ matrix.name }} Determinism Hash" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "Hash: ${{ env.HASH }}" >> $GITHUB_STEP_SUMMARY
+          cat build/det_output_${{ matrix.artifact }}.txt | tail -10 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  hash-comparison:
+    needs: determinism-matrix
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download All Results
+        uses: actions/download-artifact@v4
+        with:
+          path: results
+
+      - name: Compare Hashes
+        run: |
+          python3 tools/hash_compare.py results/
+
+      - name: Generate Summary
+        run: |
+          python3 tools/ci_report.py results/ >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if Mismatch
+        run: |
+          if [ -f results/DETERMINISM_FAILED ]; then
+            echo "DETERMINISM FAILURE DETECTED"
+            exit 1
+          fi
