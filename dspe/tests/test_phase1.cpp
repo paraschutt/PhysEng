@@ -110,7 +110,12 @@ TEST(determinism) {
 // ============================================================================
 TEST(energy_conservation) {
     World w;
-    w.create_ball({ FpPos::zero(), FpPos::from_float(10.0f), FpPos::zero() });
+    EntityId ball_id = w.create_ball({ FpPos::zero(), FpPos::from_float(10.0f), FpPos::zero() });
+    // Disable drag for this test — we are verifying restitution (e=0.8),
+    // not aerodynamic drag.  With Cd=0.25 the ball loses ~15% of energy
+    // during the 10m fall, pushing the bounce height well below the
+    // analytical e²*h = 6.4m target.
+    w.entities()[ball_id].rigidbody.drag_cd = FpVel::from_float(0.0f);
 
     TickInput no_input{};
     float peak_after_bounce = 0.0f;

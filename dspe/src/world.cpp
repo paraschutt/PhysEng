@@ -388,4 +388,32 @@ void World::debug_print_entity(EntityId id) const {
            e.has(COMP_SLEEP) ? "YES" : "NO");
 }
 
+// ============================================================================
+// Surface state update — also updates ground material to match wetness
+// ============================================================================
+void World::set_surface(const SurfaceState& s) {
+    surface_ = s;
+
+    // Update the ground entity's material to match the surface wetness state.
+    // MAT_WET_GRASS (kinetic mu=0.35) when wet, MAT_DRY_GRASS (kinetic mu=0.60)
+    // when dry.  The material system already encodes the wet/dry friction
+    // difference, so the ground material change is the sole mechanism — we do
+    // NOT additionally scale the solver mu by the wetness factor for ground
+    // contacts (that would double-count the wetness effect).
+    //
+    // The wetness factor is still applied in the solver for non-ground contacts
+    // (e.g., player-boot vs player-boot) where the material pair doesn't
+    // already encode surface conditions.
+    //
+    // NOTE: We assume the first ARCH_STATIC entity is the ground plane.
+    MaterialId ground_mat = (s.wetness < FpVel::from_float(0.5f))
+                            ? MAT_WET_GRASS : MAT_DRY_GRASS;
+    for (EntityId id = ENV_BEGIN; id < ENV_END; ++id) {
+        if (entities_[id].component_mask == ARCH_STATIC) {
+            entities_[id].collider.material_id = ground_mat;
+            break;
+        }
+    }
+}
+
 } // namespace dspe

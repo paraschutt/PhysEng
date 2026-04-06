@@ -73,7 +73,14 @@ void ConstraintSolver::build_contact_constraints(
 
         FpVel e_combined  = combined_restitution(manifold.mat_a, manifold.mat_b);
         FpVel mu_combined = combined_kinetic_mu(manifold.mat_a, manifold.mat_b);
-        mu_combined = surface.apply_wetness(mu_combined);
+        // Apply wetness modifier only to non-ground contacts.
+        // Ground contacts (entity >= ENV_BEGIN) already use a material that
+        // encodes the surface condition (MAT_WET_GRASS vs MAT_DRY_GRASS),
+        // set by World::set_surface().  Applying the wetness factor again
+        // would double-count the wetness effect for ground contacts.
+        if (ida < ENV_BEGIN && idb < ENV_BEGIN) {
+            mu_combined = surface.apply_wetness(mu_combined);
+        }
 
         for (uint8_t ci = 0; ci < manifold.count; ++ci) {
             if (contact_count_ >= (int)contact_pool_.size()) break;
@@ -122,6 +129,23 @@ void ConstraintSolver::build_contact_constraints(
             FpVel dt_inv = FpVel::from_float(60.0f);   // outer tick: 60 Hz
             FpVel excess = cp.depth - params_.baumgarte_slop;
             if (excess.raw < 0) excess = FpVel::zero();
+
+            // FIX: Cap penetration depth used for Baumgarte bias.
+            //
+            // Entities spawned in overlapping configurations (e.g. 30 players
+            // stacked at 0.2m intervals inside 1.62m-long capsules) generate
+            // depths of ~1.4m per pair.  Without capping, the Baumgarte bias
+            // is β * dt_inv * 1.4 = 16.8 m/s per iteration, compounding
+            // across 10 iterations and 30×29/2 contacts → explosion to 141m.
+            //
+            // Baumgarte is a small-penetration stabilisation mechanism, not a
+            // deep-overlap resolver.  Capping at 0.1m (100mm) limits the
+            // maximum bias to 0.2 * 60 * 0.1 = 1.2 m/s per iteration —
+            // strong enough to resolve resting contact within a few ticks
+            // but too weak to excite the solver cascade.
+            FpVel max_depth = FpVel::from_float(0.1f);
+            if (excess > max_depth) excess = max_depth;
+
             c.bias = params_.baumgarte_beta * dt_inv * excess;
 
             // Restitution: only if relative velocity > slop

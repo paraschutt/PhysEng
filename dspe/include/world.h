@@ -118,7 +118,7 @@ public:
                        uint32_t frame);
 
     // ── Surface state update ─────────────────────────────────────────────────
-    void set_surface(const SurfaceState& s) { surface_ = s; }
+    void set_surface(const SurfaceState& s);
 
     // ── Debug ───────────────────────────────────────────────────────────────
     void debug_print_entity(EntityId id) const;

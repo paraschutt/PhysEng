@@ -61,6 +61,16 @@ target_include_directories(dspe PUBLIC include)
 # Tests
 # ============================================================================
 add_executable(dspe_tests tests/test_phase1.cpp)
+add_executable(dspe_diag tests/test_diag.cpp)
+add_executable(dspe_bugdiag tests/diag_bugs.cpp)
+add_executable(dspe_bugdiag2 tests/diag_bugs2.cpp)
+add_executable(dspe_stability_diag tests/diag_stability.cpp)
+add_executable(dspe_friction_diag tests/diag_friction.cpp)
+target_link_libraries(dspe_diag PRIVATE dspe)
+target_link_libraries(dspe_bugdiag PRIVATE dspe)
+target_link_libraries(dspe_bugdiag2 PRIVATE dspe)
+target_link_libraries(dspe_stability_diag PRIVATE dspe)
+target_link_libraries(dspe_friction_diag PRIVATE dspe)
 target_link_libraries(dspe_tests PRIVATE dspe)
 
 enable_testing()
