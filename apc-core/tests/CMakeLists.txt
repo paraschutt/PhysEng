@@ -116,3 +116,31 @@ add_test(NAME Sprint7CollisionIntegration COMMAND test_sprint7_collision)
 add_executable(test_sprint8_humanoid integration/test_sprint8_humanoid.cpp)
 target_link_libraries(test_sprint8_humanoid PRIVATE apc_core)
 add_test(NAME Sprint8HumanoidIntegration COMMAND test_sprint8_humanoid)
+
+# ---------------------------------------------------------
+# Sprint 9 Tests — ImpactStyleProfile, MaterialCurve LUTs
+# ---------------------------------------------------------
+add_executable(test_sprint9 correctness/test_sprint9.cpp)
+target_link_libraries(test_sprint9 PRIVATE apc_core)
+add_test(NAME Sprint9Correctness COMMAND test_sprint9)
+
+# ---------------------------------------------------------
+# Sprint 10 Tests — StylizedSolver: Profile-Aware Non-Linear Solving
+# ---------------------------------------------------------
+add_executable(test_sprint10_stylized integration/test_sprint10_stylized.cpp)
+target_link_libraries(test_sprint10_stylized PRIVATE apc_core)
+add_test(NAME Sprint10StylizedIntegration COMMAND test_sprint10_stylized)
+
+# ---------------------------------------------------------
+# Sprint 11 Tests — Game Hooks: Hit-Stop, Time-Scale, Camera Shake, Blend Overrides
+# ---------------------------------------------------------
+add_executable(test_sprint11_hooks integration/test_sprint11_hooks.cpp)
+target_link_libraries(test_sprint11_hooks PRIVATE apc_core)
+add_test(NAME Sprint11HooksIntegration COMMAND test_sprint11_hooks)
+
+# ---------------------------------------------------------
+# Sprint 12 Tests — ImpactOutcomeTable + Tackle Vertical Slice
+# ---------------------------------------------------------
+add_executable(test_sprint12_tackle integration/test_sprint12_tackle.cpp)
+target_link_libraries(test_sprint12_tackle PRIVATE apc_core)
+add_test(NAME Sprint12TackleIntegration COMMAND test_sprint12_tackle)
