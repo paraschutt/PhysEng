@@ -144,3 +144,31 @@ add_test(NAME Sprint11HooksIntegration COMMAND test_sprint11_hooks)
 add_executable(test_sprint12_tackle integration/test_sprint12_tackle.cpp)
 target_link_libraries(test_sprint12_tackle PRIVATE apc_core)
 add_test(NAME Sprint12TackleIntegration COMMAND test_sprint12_tackle)
+
+# ---------------------------------------------------------
+# Sprint 13 Tests — Ball Physics Core
+# ---------------------------------------------------------
+add_executable(test_sprint13 correctness/test_sprint13.cpp)
+target_link_libraries(test_sprint13 PRIVATE apc_core)
+add_test(NAME Sprint13Correctness COMMAND test_sprint13)
+
+# ---------------------------------------------------------
+# Sprint 14 Tests — Ball Control & Passing
+# ---------------------------------------------------------
+add_executable(test_sprint14_control integration/test_sprint14.cpp)
+target_link_libraries(test_sprint14_control PRIVATE apc_core)
+add_test(NAME Sprint14ControlIntegration COMMAND test_sprint14_control)
+
+# ---------------------------------------------------------
+# Sprint 15 Tests — Bat/Racket & Contact Sports
+# ---------------------------------------------------------
+add_executable(test_sprint15 correctness/test_sprint15.cpp)
+target_link_libraries(test_sprint15 PRIVATE apc_core)
+add_test(NAME Sprint15Correctness COMMAND test_sprint15)
+
+# ---------------------------------------------------------
+# Sprint 16 Tests — Sport Environments & Integration
+# ---------------------------------------------------------
+add_executable(test_sprint16 integration/test_sprint16.cpp)
+target_link_libraries(test_sprint16 PRIVATE apc_core)
+add_test(NAME Sprint16Integration COMMAND test_sprint16)
