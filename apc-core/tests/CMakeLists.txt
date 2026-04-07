@@ -186,3 +186,10 @@ add_test(NAME Sprint17Correctness COMMAND test_sprint17)
 add_executable(test_sprint18 correctness/test_sprint18.cpp)
 target_link_libraries(test_sprint18 PRIVATE apc_core)
 add_test(NAME Sprint18Correctness COMMAND test_sprint18)
+
+# ---------------------------------------------------------
+# Sprint 19 Tests — Sport Field & Ball Visualization
+# ---------------------------------------------------------
+add_executable(test_sprint19 correctness/test_sprint19.cpp)
+target_link_libraries(test_sprint19 PRIVATE apc_core)
+add_test(NAME Sprint19Correctness COMMAND test_sprint19)
