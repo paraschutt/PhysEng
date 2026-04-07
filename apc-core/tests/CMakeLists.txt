@@ -179,3 +179,10 @@ add_test(NAME Sprint16Integration COMMAND test_sprint16)
 add_executable(test_sprint17 correctness/test_sprint17.cpp)
 target_link_libraries(test_sprint17 PRIVATE apc_core)
 add_test(NAME Sprint17Correctness COMMAND test_sprint17)
+
+# ---------------------------------------------------------
+# Sprint 18 Tests — Skeletal & Contact Visualization
+# ---------------------------------------------------------
+add_executable(test_sprint18 correctness/test_sprint18.cpp)
+target_link_libraries(test_sprint18 PRIVATE apc_core)
+add_test(NAME Sprint18Correctness COMMAND test_sprint18)
