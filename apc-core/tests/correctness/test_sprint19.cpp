@@ -205,29 +205,33 @@ static int test_field_renderer_rectangle_markings() {
     apc::FieldRenderer renderer;
     renderer.process_field(field);
 
-    // Draw markings
-    apc::DebugDraw dd;
-    renderer.draw_field_markings(dd);
-    uint32_t line_count = dd.list.get_line_count();
-    assert(line_count > 0u && "Markings produce lines");
+    // Draw markings (scoped to limit stack usage on MSVC)
+    {
+        apc::DebugDraw dd;
+        renderer.draw_field_markings(dd);
+        uint32_t line_count = dd.list.get_line_count();
+        assert(line_count > 0u && "Markings produce lines");
 
-    // Draw all
-    dd.clear();
-    renderer.draw_all(dd);
-    uint32_t total_lines = dd.list.get_line_count();
-    uint32_t total_tris = dd.list.get_triangle_count();
-    assert(total_tris == 2u && "All: 2 ground triangles");
-    assert(total_lines > line_count && "All: more lines than markings alone");
+        // Draw all
+        dd.clear();
+        renderer.draw_all(dd);
+        uint32_t total_lines = dd.list.get_line_count();
+        uint32_t total_tris = dd.list.get_triangle_count();
+        assert(total_tris == 2u && "All: 2 ground triangles");
+        assert(total_lines > line_count && "All: more lines than markings alone");
+    }
 
     // No-markings config
-    apc::FieldRenderer renderer2;
-    apc::FieldRendererConfig no_marks;
-    no_marks.show_markings = false;
-    renderer2.set_config(no_marks);
-    renderer2.process_field(field);
-    apc::DebugDraw dd2;
-    renderer2.draw_field_markings(dd2);
-    assert(dd2.list.get_line_count() == 0u && "No-markings config: 0 lines");
+    {
+        apc::FieldRenderer renderer2;
+        apc::FieldRendererConfig no_marks;
+        no_marks.show_markings = false;
+        renderer2.set_config(no_marks);
+        renderer2.process_field(field);
+        apc::DebugDraw dd;
+        renderer2.draw_field_markings(dd);
+        assert(dd.list.get_line_count() == 0u && "No-markings config: 0 lines");
+    }
 
     std::printf("    [PASS] Rectangle markings and config toggles verified\n");
     return 0;
@@ -313,26 +317,33 @@ static int test_goal_post_renderer() {
     goal.team_id = 0;
 
     apc::GoalPostRenderer gpr;
-    apc::DebugDraw dd;
     apc::RenderColor white = apc::RenderColor::WHITE();
-    gpr.draw_goal_structure(goal, dd, white);
 
-    // 2 posts + 1 crossbar + 8 net edges = 11 lines (with depth > 0)
-    uint32_t lines = dd.list.get_line_count();
-    assert(lines == 11u && "Goal with net: 11 lines");
+    // Goal with net (scoped to limit stack usage on MSVC)
+    {
+        apc::DebugDraw dd;
+        gpr.draw_goal_structure(goal, dd, white);
+        // 2 posts + 1 crossbar + 8 net edges = 11 lines (with depth > 0)
+        uint32_t lines = dd.list.get_line_count();
+        assert(lines == 11u && "Goal with net: 11 lines");
+    }
 
     // Goal without depth
-    apc::GoalPost goal_no_net = goal;
-    goal_no_net.depth = 0.0f;
-    apc::DebugDraw dd2;
-    gpr.draw_goal_structure(goal_no_net, dd2, white);
-    assert(dd2.list.get_line_count() == 3u && "Goal without net: 3 lines");
+    {
+        apc::GoalPost goal_no_net = goal;
+        goal_no_net.depth = 0.0f;
+        apc::DebugDraw dd;
+        gpr.draw_goal_structure(goal_no_net, dd, white);
+        assert(dd.list.get_line_count() == 3u && "Goal without net: 3 lines");
+    }
 
     // Post hit
-    apc::DebugDraw dd3;
-    gpr.draw_post_hit(goal.opening_center, dd3);
-    // Sphere wireframe with 8 segments = 3 circles × 8 = 24 lines
-    assert(dd3.list.get_line_count() == 24u && "Post hit: 24 lines (wireframe sphere)");
+    {
+        apc::DebugDraw dd;
+        gpr.draw_post_hit(goal.opening_center, dd);
+        // Sphere wireframe with 8 segments = 3 circles × 8 = 24 lines
+        assert(dd.list.get_line_count() == 24u && "Post hit: 24 lines (wireframe sphere)");
+    }
 
     std::printf("    [PASS] GoalPostRenderer verified\n");
     return 0;
@@ -380,28 +391,36 @@ static int test_boundary_event_visualizer_draw() {
     evt.timestamp = 0.0f;
 
     apc::BoundaryEventVisualizer bev;
-    apc::DebugDraw dd;
 
     // t=0: should produce lines (expanding ring)
-    bev.draw_event(evt, 0.0f, dd);
-    assert(dd.list.get_line_count() == 16u && "GOAL at t=0: 16 lines (ring)");
+    {
+        apc::DebugDraw dd;
+        bev.draw_event(evt, 0.0f, dd);
+        assert(dd.list.get_line_count() == 16u && "GOAL at t=0: 16 lines (ring)");
+    }
 
     // t=0.5: still active but smaller
-    dd.clear();
-    bev.draw_event(evt, 0.5f, dd);
-    assert(dd.list.get_line_count() == 16u && "GOAL at t=0.5: 16 lines (smaller ring)");
+    {
+        apc::DebugDraw dd;
+        bev.draw_event(evt, 0.5f, dd);
+        assert(dd.list.get_line_count() == 16u && "GOAL at t=0.5: 16 lines (smaller ring)");
+    }
 
     // t>1.0: expired, no lines
-    dd.clear();
-    bev.draw_event(evt, 1.5f, dd);
-    assert(dd.list.get_line_count() == 0u && "GOAL at t=1.5: expired, 0 lines");
+    {
+        apc::DebugDraw dd;
+        bev.draw_event(evt, 1.5f, dd);
+        assert(dd.list.get_line_count() == 0u && "GOAL at t=1.5: expired, 0 lines");
+    }
 
     // OUT_OF_BOUNDS at t=0: X marker (2 lines)
     evt.type = apc::BoundaryEventType::OUT_OF_BOUNDS;
     evt.position = apc::Vec3(55.0f, 0.0f, 35.0f);
-    dd.clear();
-    bev.draw_event(evt, 0.0f, dd);
-    assert(dd.list.get_line_count() == 2u && "OOB at t=0: 2 lines (X marker)");
+    {
+        apc::DebugDraw dd;
+        bev.draw_event(evt, 0.0f, dd);
+        assert(dd.list.get_line_count() == 2u && "OOB at t=0: 2 lines (X marker)");
+    }
 
     std::printf("    [PASS] BoundaryEventVisualizer draw and fade verified\n");
     return 0;
@@ -582,19 +601,23 @@ static int test_ball_renderer_shadow() {
     apc::BallRenderer renderer;
     renderer.process_ball(ball);
 
-    apc::DebugDraw dd;
-    renderer.draw_ball_shadow(dd);
-    // Shadow: 8-segment circle = 8 lines
-    assert(dd.list.get_line_count() == 8u && "Shadow: 8 lines (circle)");
+    {
+        apc::DebugDraw dd;
+        renderer.draw_ball_shadow(dd);
+        // Shadow: 8-segment circle = 8 lines
+        assert(dd.list.get_line_count() == 8u && "Shadow: 8 lines (circle)");
+    }
 
     // No shadow config
     apc::BallVisualConfig no_shadow;
     no_shadow.shadow_enabled = false;
     renderer.set_config(no_shadow);
     renderer.process_ball(ball);
-    apc::DebugDraw dd2;
-    renderer.draw_ball_shadow(dd2);
-    assert(dd2.list.get_line_count() == 0u && "No shadow: 0 lines");
+    {
+        apc::DebugDraw dd;
+        renderer.draw_ball_shadow(dd);
+        assert(dd.list.get_line_count() == 0u && "No shadow: 0 lines");
+    }
 
     std::printf("    [PASS] Ball shadow verified\n");
     return 0;
@@ -619,18 +642,22 @@ static int test_ball_renderer_spin() {
     renderer.set_config(spin_cfg);
     renderer.process_ball(ball);
 
-    apc::DebugDraw dd;
-    renderer.draw_spin_indicator(dd);
-    // Velocity arrow with non-zero speed: 3 lines (shaft + 2 arrowhead)
-    assert(dd.list.get_line_count() == 3u && "Spin indicator: 3 lines (arrow)");
+    {
+        apc::DebugDraw dd;
+        renderer.draw_spin_indicator(dd);
+        // Velocity arrow with non-zero speed: 3 lines (shaft + 2 arrowhead)
+        assert(dd.list.get_line_count() == 3u && "Spin indicator: 3 lines (arrow)");
+    }
 
     // Zero spin: no lines
     ball.body.angular_velocity = apc::Vec3(0.0f, 0.0f, 0.0f);
     ball.update_spin_info();
     renderer.process_ball(ball);
-    apc::DebugDraw dd2;
-    renderer.draw_spin_indicator(dd2);
-    assert(dd2.list.get_line_count() == 0u && "Zero spin: 0 lines");
+    {
+        apc::DebugDraw dd;
+        renderer.draw_spin_indicator(dd);
+        assert(dd.list.get_line_count() == 0u && "Zero spin: 0 lines");
+    }
 
     std::printf("    [PASS] Ball spin indicator verified\n");
     return 0;
