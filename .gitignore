@@ -31,6 +31,7 @@ Makefile
 *.dylib
 *.dll
 *.exe
+*.gch
 
 # Testing
 Testing/

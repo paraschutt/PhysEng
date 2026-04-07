@@ -115,6 +115,8 @@ struct TrajectorySim {
 } // namespace apc::test
 
 int main(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
     using namespace apc;
     using namespace apc::test;
     

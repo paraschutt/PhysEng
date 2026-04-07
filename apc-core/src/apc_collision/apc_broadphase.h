@@ -33,6 +33,12 @@ public:
         AABB aabb;
     };
 
+    // Collision filter function type
+    // Returns true if the pair should be tested for collision
+    using FilterFunc = bool (*)(uint32_t id_a, uint32_t id_b, void* user_data);
+    void* filter_user_data = nullptr;
+    FilterFunc filter_func = nullptr;
+
     void update(const std::vector<Proxy>& proxies) {
         endpoints.clear();
         endpoints.reserve(proxies.size() * 2);
@@ -88,6 +94,9 @@ public:
 
                     // DETERMINISM: Enforce id_a < id_b
                     if (id_a > id_b) std::swap(id_a, id_b);
+
+                    // Apply collision filter if configured
+                    if (filter_func && !filter_func(id_a, id_b, filter_user_data)) continue;
                     
                     potential_pairs.push_back({id_a, id_b});
                 }

@@ -49,6 +49,11 @@ add_test(NAME GJKEPACorrectness COMMAND test_gjk_epa)
 add_executable(test_broadphase correctness/test_broadphase.cpp)
 target_link_libraries(test_broadphase PRIVATE apc_core)
 add_test(NAME BroadphaseCorrectness COMMAND test_broadphase)
+
+add_executable(test_dispatch correctness/test_dispatch.cpp)
+target_link_libraries(test_dispatch PRIVATE apc_core)
+add_test(NAME DispatchCorrectness COMMAND test_dispatch)
+
 # ---------------------------------------------------------
 # Integration Tests
 # ---------------------------------------------------------
@@ -72,3 +77,7 @@ add_test(NAME BlendModes COMMAND test_blend_modes)
 add_executable(test_friction integration/test_friction.cpp)
 target_link_libraries(test_friction PRIVATE apc_core)
 add_test(NAME FrictionIntegration COMMAND test_friction)
+
+add_executable(test_solver_v2 integration/test_solver_v2.cpp)
+target_link_libraries(test_solver_v2 PRIVATE apc_core)
+add_test(NAME SolverV2Integration COMMAND test_solver_v2)

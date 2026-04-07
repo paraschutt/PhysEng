@@ -30,25 +30,23 @@ FPUState enforce_deterministic_fp_mode() {
     // x87 is effectively unused in 64-bit Windows, so we don't touch it.
     result.raw_state = static_cast<uint64_t>(current_cw) << 32;
 #else
-    // GCC/Clang x64: SSE + x87 inline assembly
+    // GCC/Clang x64: SSE control (x87 is effectively unused on x86-64;
+    // all float/double math uses SSE2. Modifying x87 CW can cause SIGFPE
+    // on some platforms, so we leave it alone.)
     unsigned int sse_cw = _mm_getcsr();
-    sse_cw |= (1u << 15); // FZ
-    sse_cw |= (1u << 6);  // DAZ
-    sse_cw &= ~(3u << 13); // RC
-    
-#ifndef NDEBUG
-    sse_cw &= ~(1u << 12); // PM
-#endif
+    sse_cw |= (1u << 15); // FZ (flush denormals to zero)
+    sse_cw |= (1u << 6);  // DAZ (denormals are zero)
+    sse_cw &= ~(3u << 13); // RC (round to nearest even)
+    // Note: we intentionally keep PM bit set (precision exceptions masked).
+    // Clearing PM would cause SIGFPE on denormals/overflow in unoptimized builds.
+    // Determinism is ensured by FZ/DAZ/RC, not by exception signaling.
     
     _mm_setcsr(sse_cw);
     result.raw_state = (static_cast<uint64_t>(sse_cw) << 32);
 
-    unsigned short x87_cw;
+    // x87: read but do not modify on x86-64 (not used for scalar math)
+    unsigned short x87_cw = 0;
     __asm__ __volatile__("fnstcw %0" : "=m"(x87_cw));
-    x87_cw &= ~(3u << 10);  
-    x87_cw &= ~(3u << 8);   
-    x87_cw |= (2u << 8);   
-    __asm__ __volatile__("fldcw %0" : : "m"(x87_cw));
     result.raw_state |= static_cast<uint64_t>(x87_cw);
 #endif
 
@@ -97,8 +95,13 @@ void restore_fp_mode(const FPUState& state) {
 #else
     unsigned int sse_cw = static_cast<unsigned int>(state.raw_state >> 32);
     _mm_setcsr(sse_cw);
-    unsigned short x87_cw = static_cast<unsigned short>(state.raw_state & 0xFFFF);
-    __asm__ __volatile__("fldcw %0" : : "m"(x87_cw));
+    // x87: restore only if the saved state differs from current
+    unsigned short current_x87 = 0;
+    __asm__ __volatile__("fnstcw %0" : "=m"(current_x87));
+    unsigned short saved_x87 = static_cast<unsigned short>(state.raw_state & 0xFFFF);
+    if (current_x87 != saved_x87) {
+        __asm__ __volatile__("fldcw %0" : : "m"(saved_x87));
+    }
 #endif
 }
 

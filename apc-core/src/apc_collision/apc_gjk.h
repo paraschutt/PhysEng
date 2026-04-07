@@ -8,7 +8,7 @@ struct ConvexHull {
     // Function pointer to get vertex in local space
     // MUST return deterministic tie-breaks if dots are equal (handled inside GJK)
     using SupportFunc = Vec3 (*)(const void* shape, const Vec3& dir, uint32_t& out_vertex_id);
-    
+
     const void* user_data;
     SupportFunc support;
 };
@@ -18,54 +18,75 @@ struct GJKResult {
     Vec3 separation_vector; // Valid only if intersecting == false
 };
 
+// Simplex data exposed for EPA seeding and external inspection.
+struct GJKSimplex {
+    Vec3 points[4];
+    int count = 0;
+
+    void add(const Vec3& p) {
+        if (count < 4) points[count++] = p;
+    }
+};
+
 class GJKBoolean {
 public:
     static constexpr uint32_t MAX_ITERATIONS = 32;
 
+    // Standard boolean query.
     static GJKResult query(const ConvexHull& hull_a, const ConvexHull& hull_b) {
+        GJKSimplex simplex;
+        return query_with_simplex(hull_a, hull_b, simplex);
+    }
+
+    // Extended query that also returns the GJK simplex for EPA seeding.
+    // simplex_out is populated when intersecting == true.
+    static GJKResult query_with_simplex(
+        const ConvexHull& hull_a,
+        const ConvexHull& hull_b,
+        GJKSimplex& simplex_out)
+    {
+        simplex_out.count = 0;
+
         Vec3 direction = Vec3(1.0f, 0.0f, 0.0f); // Initial arbitrary direction
-        
-        Simplex simplex;
-        uint32_t discard_id_a, discard_id_b;
-        
+
+        GJKSimplex simplex;
+        uint32_t discard_id_a = 0u;
+        uint32_t discard_id_b = 0u;
+
         // Get initial point
         Vec3 point = support(hull_a, hull_b, direction, discard_id_a, discard_id_b);
         simplex.add(point);
-        
+
         // Flip direction for next search
         direction = Vec3::scale(direction, -1.0f);
-        
+
         for (uint32_t i = 0; i < MAX_ITERATIONS; ++i) {
             point = support(hull_a, hull_b, direction, discard_id_a, discard_id_b);
-            
+
             // If the furthest point in the opposite direction isn't past the origin,
             // the shapes do not intersect.
             if (Vec3::dot(point, direction) < 0.0f) {
                 return { false, direction }; // Separated
             }
-            
+
             simplex.add(point);
-            
+
             if (do_simplex(simplex, direction)) {
+                // Intersecting — copy simplex for EPA seeding
+                for (int j = 0; j < simplex.count && j < 4; ++j) {
+                    simplex_out.points[j] = simplex.points[j];
+                }
+                simplex_out.count = simplex.count;
                 return { true, Vec3(0.0f, 0.0f, 0.0f) }; // Intersecting!
             }
         }
-        
+
         // Failed to converge (degenerate shapes floating point noise)
         // Fallback: Assume separated to prevent physics explosions
         return { false, direction };
     }
 
 private:
-    struct Simplex {
-        Vec3 points[4];
-        int count = 0;
-
-        void add(const Vec3& p) {
-            if (count < 4) points[count++] = p;
-        }
-    };
-
     static Vec3 triple_product(const Vec3& a, const Vec3& b, const Vec3& c) {
         // (A x B) x C = B(A.C) - A(B.C)
         float ac = Vec3::dot(a, c);
@@ -80,7 +101,7 @@ private:
         return Vec3::sub(p_a, p_b); // Minkowski difference
     }
 
-    static bool do_simplex(Simplex& simplex, Vec3& direction) {
+    static bool do_simplex(GJKSimplex& simplex, Vec3& direction) {
         switch (simplex.count) {
             case 2: return line_case(simplex, direction);
             case 3: return triangle_case(simplex, direction);
@@ -89,7 +110,7 @@ private:
         }
     }
 
-    static bool line_case(Simplex& s, Vec3& dir) {
+    static bool line_case(GJKSimplex& s, Vec3& dir) {
         Vec3 A = s.points[1];
         Vec3 B = s.points[0];
         Vec3 AB = Vec3::sub(B, A);
@@ -105,11 +126,11 @@ private:
         return false;
     }
 
-    static bool triangle_case(Simplex& s, Vec3& dir) {
+    static bool triangle_case(GJKSimplex& s, Vec3& dir) {
         Vec3 A = s.points[2];
         Vec3 B = s.points[1];
         Vec3 C = s.points[0];
-        
+
         Vec3 AB = Vec3::sub(B, A);
         Vec3 AC = Vec3::sub(C, A);
         Vec3 AO = Vec3::scale(A, -1.0f);
@@ -139,12 +160,12 @@ private:
         return false;
     }
 
-    static bool tetrahedron_case(Simplex& s, Vec3& dir) {
+    static bool tetrahedron_case(GJKSimplex& s, Vec3& dir) {
         Vec3 A = s.points[3];
         Vec3 B = s.points[2];
         Vec3 C = s.points[1];
         Vec3 D = s.points[0];
-        
+
         Vec3 AB = Vec3::sub(B, A);
         Vec3 AC = Vec3::sub(C, A);
         Vec3 AD = Vec3::sub(D, A);
@@ -166,7 +187,7 @@ private:
             s.points[0] = D; s.points[1] = B; s.points[2] = A; s.count = 3;
             return triangle_case(s, dir);
         }
-        
+
         return true; // Origin is inside tetrahedron
     }
 };

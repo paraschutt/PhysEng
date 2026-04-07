@@ -2,6 +2,7 @@
 #include "apc_math/apc_vec3.h"
 #include "apc_math/apc_quat.h"
 #include "apc_math/apc_mat3.h"
+#include <cstdint>
 
 namespace apc {
 
@@ -14,7 +15,17 @@ struct RigidBody {
     Vec3 angular_velocity;
     
     Mat3 local_inverse_inertia;
-    Mat3 world_inverse_inertia; 
+    Mat3 world_inverse_inertia;
+
+    // Collision filtering (bitfield)
+    uint32_t collision_layer = 1;       // Which layer(s) this body is ON (default: layer 0)
+    uint32_t collision_mask  = 0xFFFFFFFF; // Which layer(s) this body collides WITH (default: all)
+
+    // Check if two bodies should collide based on their layer/mask
+    static bool should_collide(const RigidBody& a, const RigidBody& b) {
+        return (a.collision_layer & b.collision_mask) != 0 &&
+               (b.collision_layer & a.collision_mask) != 0;
+    }
 
     void update_world_inertia() {
         Mat3 rot = Mat3::from_quat(orientation);
