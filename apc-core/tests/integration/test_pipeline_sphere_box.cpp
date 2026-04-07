@@ -7,35 +7,35 @@
 using namespace apc;
 
 // --- Mock Shapes for GJK ---
-struct Sphere { float radius; };
-struct Box { Vec3 half_extents; };
+struct Sphere { Vec3 center; float radius; };
+struct Box { Vec3 center; Vec3 half_extents; };
 
 Vec3 sphere_support(const void* data, const Vec3& dir, uint32_t& out_id) {
     const Sphere* s = static_cast<const Sphere*>(data);
     float len = Vec3::length(dir);
-    if (len < 0.0001f) { out_id = 0; return Vec3(0,0,0); }
+    if (len < 0.0001f) { out_id = 0; return s->center; }
     Vec3 norm_dir = Vec3::scale(dir, 1.0f / len);
     out_id = 0;
-    return Vec3::scale(norm_dir, s->radius);
+    return Vec3::add(s->center, Vec3::scale(norm_dir, s->radius));
 }
 
 Vec3 box_support(const void* data, const Vec3& dir, uint32_t& out_id) {
     const Box* b = static_cast<const Box*>(data);
     out_id = 0;
-    return Vec3(
+    return Vec3::add(b->center, Vec3(
         (dir.x > 0.0f ? b->half_extents.x : -b->half_extents.x),
         (dir.y > 0.0f ? b->half_extents.y : -b->half_extents.y),
         (dir.z > 0.0f ? b->half_extents.z : -b->half_extents.z)
-    );
+    ));
 }
 
 int main() {
     enforce_deterministic_fp_mode(); // From Week 1
 
-    // Setup: Sphere at origin, radius 1. Box shifted slightly to the right, half-extents 0.5
+    // Setup: Sphere at origin, radius 1. Box centered at (0.5,0,0), half-extents 0.5.
     // They are overlapping by 0.5 units.
-    Sphere sphere_data{1.0f};
-    Box box_data{apc::Vec3(0.5f, 0.5f, 0.5f)};
+    Sphere sphere_data{Vec3(0.0f, 0.0f, 0.0f), 1.0f};
+    Box box_data{Vec3(0.5f, 0.0f, 0.0f), apc::Vec3(0.5f, 0.5f, 0.5f)};
 
     ConvexHull hull_sphere{ &sphere_data, sphere_support };
     ConvexHull hull_box{ &box_data, box_support };
@@ -65,9 +65,10 @@ int main() {
     assert(result.intersecting == true);
     std::printf("[PASS] GJK correctly identified overlap.\n");
 
-    // TEST 2: Move box far away
-    proxies[1].aabb.min = Vec3(5.0f, -0.5f, -0.5f);
-    proxies[1].aabb.max = Vec3(6.0f, 0.5f, 0.5f);
+    // TEST 2: Move box far away (center at 10,0,0 → no overlap with sphere at origin)
+    proxies[1].aabb.min = Vec3(9.5f, -0.5f, -0.5f);
+    proxies[1].aabb.max = Vec3(10.5f, 0.5f, 0.5f);
+    box_data.center = Vec3(10.0f, 0.0f, 0.0f);
     
     sap.update(proxies);
     sap.generate_pairs();
@@ -79,14 +80,15 @@ int main() {
     // Broadphase shows overlap (due to AABB sweep), GJK must handle it gracefully.
     proxies[0].aabb.min = Vec3(-1, -1, -1);
     proxies[0].aabb.max = Vec3(10, 1, 1); // Massive AABB representing a fast sweep
-    proxies[1].aabb.min = Vec3(2, -0.5f, -0.5f);
-    proxies[1].aabb.max = Vec3(3, 0.5f, 0.5f);
+    proxies[1].aabb.min = Vec3(4.5f, -0.5f, -0.5f);
+    proxies[1].aabb.max = Vec3(5.5f, 0.5f, 0.5f);
+    box_data.center = Vec3(5.0f, 0.0f, 0.0f); // Box center at (5,0,0), well beyond sphere at origin
 
     sap.update(proxies);
     sap.generate_pairs();
     assert(pairs.size() == 1);
 
-    // Sphere center is at 0,0,0. Box center is at 2.5,0,0.
+    // Sphere center is at 0,0,0. Box center is at 5,0,0.
     // Even though broadphase says overlap, actual shapes do not touch.
     result = GJKBoolean::query(hull_sphere, hull_box);
     assert(result.intersecting == false);

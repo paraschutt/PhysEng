@@ -26,8 +26,12 @@
 #include "apc_epa.h"              // EPA, EPAResult
 #include "apc_obb.h"              // OBB, obb_intersect
 #include "apc_plane.h"            // detect_sphere_plane, PlaneCollider
+#include "apc_capsule.h"          // CapsuleShapeData, capsule_support, detect_*_capsule*
+#include "apc_cylinder.h"         // CylinderShapeData, cylinder_support, detect_sphere_cylinder
 #include "apc_support.h"          // Support functions, shape data structs
 #include "apc_broadphase.h"       // AABB
+#include "apc_capsule.h"          // CapsuleShapeData, capsule support/detection
+#include "apc_cylinder.h"         // CylinderShapeData, cylinder support/detection
 #include <cstdint>
 #include <cmath>
 
@@ -69,7 +73,9 @@ enum class ShapeType : uint8_t {
     Box         = 1,
     ConvexPiece = 2,   // Single convex hull from decomposition
     Plane       = 3,
-    Count       = 4
+    Capsule     = 4,
+    Cylinder    = 5,
+    Count       = 6
 };
 
 // ---------------------------------------------------------------------------
@@ -88,6 +94,12 @@ struct CollisionShape {
     uint32_t  convex_vertex_count;   // ConvexPiece only
     Vec3      plane_normal;          // Plane only (point_on_plane = position)
 
+    // --- Capsule / Cylinder ---
+    float     capsule_radius;        // Capsule only
+    float     capsule_half_height;   // Capsule only
+    float     cylinder_radius;       // Cylinder only
+    float     cylinder_half_height;  // Cylinder only
+
     void update_cache() {
         rotation = Mat3::from_quat(orientation);
     }
@@ -105,6 +117,10 @@ struct CollisionShape {
         s.convex_vertices = nullptr;
         s.convex_vertex_count = 0u;
         s.plane_normal = Vec3(0.0f, 0.0f, 0.0f);
+        s.capsule_radius = 0.0f;
+        s.capsule_half_height = 0.0f;
+        s.cylinder_radius = 0.0f;
+        s.cylinder_half_height = 0.0f;
         return s;
     }
 
@@ -122,6 +138,10 @@ struct CollisionShape {
         s.convex_vertices = nullptr;
         s.convex_vertex_count = 0u;
         s.plane_normal = Vec3(0.0f, 0.0f, 0.0f);
+        s.capsule_radius = 0.0f;
+        s.capsule_half_height = 0.0f;
+        s.cylinder_radius = 0.0f;
+        s.cylinder_half_height = 0.0f;
         return s;
     }
 
@@ -139,6 +159,10 @@ struct CollisionShape {
         s.sphere_radius = 0.0f;
         s.box_half_extents = Vec3(0.0f, 0.0f, 0.0f);
         s.plane_normal = Vec3(0.0f, 0.0f, 0.0f);
+        s.capsule_radius = 0.0f;
+        s.capsule_half_height = 0.0f;
+        s.cylinder_radius = 0.0f;
+        s.cylinder_half_height = 0.0f;
         return s;
     }
 
@@ -153,6 +177,50 @@ struct CollisionShape {
         s.box_half_extents = Vec3(0.0f, 0.0f, 0.0f);
         s.convex_vertices = nullptr;
         s.convex_vertex_count = 0u;
+        s.capsule_radius = 0.0f;
+        s.capsule_half_height = 0.0f;
+        s.cylinder_radius = 0.0f;
+        s.cylinder_half_height = 0.0f;
+        return s;
+    }
+
+    static CollisionShape make_capsule(float radius, float half_height,
+                                       const Vec3& pos, const Quat& orient)
+    {
+        CollisionShape s;
+        s.type = ShapeType::Capsule;
+        s.position = pos;
+        s.orientation = orient;
+        s.rotation = Mat3::from_quat(orient);
+        s.capsule_radius = radius;
+        s.capsule_half_height = half_height;
+        s.sphere_radius = 0.0f;
+        s.box_half_extents = Vec3(0.0f, 0.0f, 0.0f);
+        s.convex_vertices = nullptr;
+        s.convex_vertex_count = 0u;
+        s.plane_normal = Vec3(0.0f, 0.0f, 0.0f);
+        s.cylinder_radius = 0.0f;
+        s.cylinder_half_height = 0.0f;
+        return s;
+    }
+
+    static CollisionShape make_cylinder(float radius, float half_height,
+                                        const Vec3& pos, const Quat& orient)
+    {
+        CollisionShape s;
+        s.type = ShapeType::Cylinder;
+        s.position = pos;
+        s.orientation = orient;
+        s.rotation = Mat3::from_quat(orient);
+        s.cylinder_radius = radius;
+        s.cylinder_half_height = half_height;
+        s.sphere_radius = 0.0f;
+        s.box_half_extents = Vec3(0.0f, 0.0f, 0.0f);
+        s.convex_vertices = nullptr;
+        s.convex_vertex_count = 0u;
+        s.plane_normal = Vec3(0.0f, 0.0f, 0.0f);
+        s.capsule_radius = 0.0f;
+        s.capsule_half_height = 0.0f;
         return s;
     }
 
@@ -227,6 +295,28 @@ struct CollisionShape {
                 aabb.min = Vec3(position.x - E, position.y - E, position.z - 0.1f);
                 aabb.max = Vec3(position.x + E, position.y + E, position.z + 0.1f);
             }
+            break;
+        }
+        case ShapeType::Capsule: {
+            CapsuleShapeData cap_data;
+            cap_data.radius = capsule_radius;
+            cap_data.half_height = capsule_half_height;
+            cap_data.position = position;
+            cap_data.orientation = orientation;
+            cap_data.rotation = rotation;
+            cap_data.update_cache();
+            aabb = capsule_get_aabb(cap_data);
+            break;
+        }
+        case ShapeType::Cylinder: {
+            CylinderShapeData cyl_data;
+            cyl_data.radius = cylinder_radius;
+            cyl_data.half_height = cylinder_half_height;
+            cyl_data.position = position;
+            cyl_data.orientation = orientation;
+            cyl_data.rotation = rotation;
+            cyl_data.update_cache();
+            aabb = cylinder_get_aabb(cyl_data);
             break;
         }
         default:
@@ -386,6 +476,36 @@ inline ConvexHull make_sphere_hull(const CollisionShape& shape,
     return hull;
 }
 
+inline ConvexHull make_capsule_hull(const CollisionShape& shape,
+                                     CapsuleShapeData& cap_buf)
+{
+    cap_buf.radius = shape.capsule_radius;
+    cap_buf.half_height = shape.capsule_half_height;
+    cap_buf.position = shape.position;
+    cap_buf.orientation = shape.orientation;
+    cap_buf.rotation = shape.rotation;
+    cap_buf.update_cache();
+    ConvexHull hull;
+    hull.user_data = &cap_buf;
+    hull.support = capsule_support;
+    return hull;
+}
+
+inline ConvexHull make_cylinder_hull(const CollisionShape& shape,
+                                      CylinderShapeData& cyl_buf)
+{
+    cyl_buf.radius = shape.cylinder_radius;
+    cyl_buf.half_height = shape.cylinder_half_height;
+    cyl_buf.position = shape.position;
+    cyl_buf.orientation = shape.orientation;
+    cyl_buf.rotation = shape.rotation;
+    cyl_buf.update_cache();
+    ConvexHull hull;
+    hull.user_data = &cyl_buf;
+    hull.support = cylinder_support;
+    return hull;
+}
+
     // -----------------------------------------------------------------------
     // rebuild_simplex() — build a non-degenerate simplex from 4 tetrahedral
     // directions. Used when GJK produces a degenerate (coplanar/collinear)
@@ -417,6 +537,43 @@ inline ConvexHull make_sphere_hull(const CollisionShape& shape,
         Vec3 ac = Vec3::sub(pts[1], a);
         Vec3 ad = Vec3::sub(pts[2], a);
         return Vec3::dot(Vec3::cross(ab, ac), ad);
+    }
+
+    // -----------------------------------------------------------------------
+    // gjk_epa_generic() — GJK+EPA for generic convex hull pairs.
+    // Returns B->A normal convention.
+    // -----------------------------------------------------------------------
+    inline bool gjk_epa_generic(const ConvexHull& hull_a, const ConvexHull& hull_b,
+                                ContactPoint& out_contact)
+    {
+        GJKSimplex simplex;
+        GJKResult gjk = GJKBoolean::query_with_simplex(hull_a, hull_b, simplex);
+
+        if (!gjk.intersecting) {
+            return false;
+        }
+
+        EPAResult epa;
+        if (simplex.count >= 4 &&
+            apc::math::abs(simplex_volume(simplex.points)) > APC_EPSILON)
+        {
+            epa = EPA::query(simplex.points, simplex.count, hull_a, hull_b);
+        } else {
+            Vec3 rebuilt[4];
+            rebuild_simplex(hull_a, hull_b, rebuilt);
+            epa = EPA::query(rebuilt, 4, hull_a, hull_b);
+        }
+
+        if (!epa.success) {
+            return false;
+        }
+
+        // EPA normal is A->B. We need B->A.
+        out_contact.normal      = Vec3::scale(epa.normal, -1.0f);
+        out_contact.penetration = epa.penetration;
+        out_contact.point_on_a  = epa.point_on_a;
+        out_contact.point_on_b  = epa.point_on_b;
+        return true;
     }
 
 } // namespace detail
@@ -548,6 +705,105 @@ inline bool detect_convex_convex(
 }
 
 // ---------------------------------------------------------------------------
+// detect_plane_box() — plane vs oriented box collision detection.
+// Normal convention: B->A (plane->box, i.e., plane normal direction).
+//
+// Algorithm: Transform all 8 box corners to world space, compute signed
+// distance of each to the plane. The most deeply penetrating corner becomes
+// the contact point. If no corner is below the plane, no collision.
+// ---------------------------------------------------------------------------
+inline bool detect_plane_box(
+    const Vec3& plane_point,
+    const Vec3& plane_normal,
+    const Vec3& box_pos,
+    const Vec3& box_half_extents,
+    const Mat3& box_rot,
+    ContactPoint& out_contact)
+{
+    // All 8 box corners in local space
+    const float hx = box_half_extents.x;
+    const float hy = box_half_extents.y;
+    const float hz = box_half_extents.z;
+    Vec3 corners[8] = {
+        Vec3(-hx, -hy, -hz), Vec3( hx, -hy, -hz),
+        Vec3(-hx,  hy, -hz), Vec3( hx,  hy, -hz),
+        Vec3(-hx, -hy,  hz), Vec3( hx, -hy,  hz),
+        Vec3(-hx,  hy,  hz), Vec3( hx,  hy,  hz)
+    };
+
+    float min_dist = 1e30f;
+    uint32_t min_idx = 0u;
+
+    // Find the corner with the minimum (most negative) signed distance
+    for (uint32_t i = 0u; i < 8u; ++i) {
+        Vec3 world_corner = Vec3::add(box_pos, box_rot.transform_vec(corners[i]));
+        float d = Vec3::dot(Vec3::sub(world_corner, plane_point), plane_normal);
+        if (d < min_dist) {
+            min_dist = d;
+            min_idx = i;
+        }
+    }
+
+    // min_dist > 0 means all corners are on the outside — no collision
+    if (min_dist > 0.0f) {
+        return false;
+    }
+
+    // Contact: the deepest penetrating corner
+    Vec3 deepest_corner = Vec3::add(box_pos, box_rot.transform_vec(corners[min_idx]));
+
+    out_contact.normal = plane_normal;  // B->A (plane->box)
+    out_contact.penetration = -min_dist; // positive penetration depth
+    out_contact.point_on_a = deepest_corner;               // box surface (deepest corner)
+    out_contact.point_on_b = Vec3::sub(deepest_corner,      // plane surface projection
+        Vec3::scale(plane_normal, min_dist));
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// detect_plane_convex() — plane vs convex piece collision detection.
+// Normal convention: B->A (plane->convex).
+//
+// Algorithm: Transform all convex vertices to world space, compute signed
+// distance of each to the plane. Find the most deeply penetrating vertex.
+// ---------------------------------------------------------------------------
+inline bool detect_plane_convex(
+    const Vec3& plane_point,
+    const Vec3& plane_normal,
+    const Vec3& convex_pos,
+    const Mat3& convex_rot,
+    const Vec3* convex_vertices,
+    uint32_t convex_vertex_count,
+    ContactPoint& out_contact)
+{
+    float min_dist = 1e30f;
+    uint32_t min_idx = 0u;
+
+    for (uint32_t i = 0u; i < convex_vertex_count; ++i) {
+        Vec3 world_v = Vec3::add(convex_pos, convex_rot.transform_vec(convex_vertices[i]));
+        float d = Vec3::dot(Vec3::sub(world_v, plane_point), plane_normal);
+        if (d < min_dist) {
+            min_dist = d;
+            min_idx = i;
+        }
+    }
+
+    if (min_dist > 0.0f) {
+        return false;
+    }
+
+    Vec3 deepest_v = Vec3::add(convex_pos, convex_rot.transform_vec(convex_vertices[min_idx]));
+
+    out_contact.normal = plane_normal;
+    out_contact.penetration = -min_dist;
+    out_contact.point_on_a = deepest_v;
+    out_contact.point_on_b = Vec3::sub(deepest_v, Vec3::scale(plane_normal, min_dist));
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // dispatch_detect() — Central collision dispatcher.
 //
 // Takes two CollisionShapes and body IDs, routes to the appropriate detector,
@@ -600,7 +856,6 @@ inline bool dispatch_detect(
     // =======================================================================
     else if (ta == ShapeType::Sphere && tb == ShapeType::ConvexPiece) {
         hit = detect_sphere_convex(shape_a, shape_b, contact);
-        // detect_sphere_convex returns B->A (convex->sphere = shape_b->shape_a) ✓
     }
     // =======================================================================
     // SPHERE – PLANE  (A=sphere, B=plane → normal B->A = plane->sphere)
@@ -612,39 +867,143 @@ inline bool dispatch_detect(
         plane.point  = shape_b.position;
         plane.normal = shape_b.plane_normal;
         hit = detect_sphere_plane(shape_a.position, col, plane, contact);
-        // detect_sphere_plane returns B->A (plane->sphere = shape_b->shape_a) ✓
     }
     // =======================================================================
-    // BOX – SPHERE  (A=box, B=sphere → need B->A = sphere->box)
-    // Swap: call with sphere first, then negate/swap.
+    // SPHERE – CAPSULE  (A=sphere, B=capsule → normal B->A = capsule->sphere)
+    // =======================================================================
+    else if (ta == ShapeType::Sphere && tb == ShapeType::Capsule) {
+        CapsuleShapeData cap_buf;
+        CapsuleShapeData& cap = cap_buf;
+        cap.radius = shape_b.capsule_radius;
+        cap.half_height = shape_b.capsule_half_height;
+        cap.position = shape_b.position;
+        cap.orientation = shape_b.orientation;
+        cap.rotation = shape_b.rotation;
+        cap.update_cache();
+        hit = detect_sphere_capsule(shape_a.position, shape_a.sphere_radius,
+                                     cap, contact);
+    }
+    // =======================================================================
+    // SPHERE – CYLINDER  (A=sphere, B=cylinder → normal B->A = cylinder->sphere)
+    // =======================================================================
+    else if (ta == ShapeType::Sphere && tb == ShapeType::Cylinder) {
+        CylinderShapeData cyl_buf;
+        CylinderShapeData& cyl = cyl_buf;
+        cyl.radius = shape_b.cylinder_radius;
+        cyl.half_height = shape_b.cylinder_half_height;
+        cyl.position = shape_b.position;
+        cyl.orientation = shape_b.orientation;
+        cyl.rotation = shape_b.rotation;
+        cyl.update_cache();
+        hit = detect_sphere_cylinder(shape_a.position, shape_a.sphere_radius,
+                                      cyl, contact);
+    }
+    // =======================================================================
+    // BOX – SPHERE  (A=box, B=sphere → need B->A = sphere->box → negate)
     // =======================================================================
     else if (ta == ShapeType::Box && tb == ShapeType::Sphere) {
         hit = detect_sphere_box(
             shape_b.position, shape_b.sphere_radius,
             shape_a.position, shape_a.box_half_extents,
             shape_a.rotation, contact);
-        if (hit) {
-            swap_contact(contact);
-        }
+        if (hit) { swap_contact(contact); }
     }
     // =======================================================================
-    // CONVEX – CONVEX  (A and B are box or convex piece)
+    // BOX – BOX  (GJK+EPA)
     // =======================================================================
-    else if ((ta == ShapeType::Box || ta == ShapeType::ConvexPiece) &&
-             (tb == ShapeType::Box || tb == ShapeType::ConvexPiece))
-    {
+    else if (ta == ShapeType::Box && tb == ShapeType::Box) {
         hit = detect_convex_convex(shape_a, shape_b, contact);
+    }
+    // =======================================================================
+    // BOX – CONVEX PIECE  (GJK+EPA)
+    // =======================================================================
+    else if (ta == ShapeType::Box && tb == ShapeType::ConvexPiece) {
+        hit = detect_convex_convex(shape_a, shape_b, contact);
+    }
+    // =======================================================================
+    // BOX – PLANE  (A=box, B=plane → need B->A = plane->box)
+    // =======================================================================
+    else if (ta == ShapeType::Box && tb == ShapeType::Plane) {
+        hit = detect_plane_box(
+            shape_b.position, shape_b.plane_normal,
+            shape_a.position, shape_a.box_half_extents,
+            shape_a.rotation, contact);
+    }
+    // =======================================================================
+    // BOX – CAPSULE  (A=box, B=capsule → GJK+EPA, negate)
+    // =======================================================================
+    else if (ta == ShapeType::Box && tb == ShapeType::Capsule) {
+        CapsuleShapeData cap_buf;
+        ConvexHull hull_a = detail::make_capsule_hull(shape_b, cap_buf);
+        BoxShapeData box_buf;
+        ConvexPieceShapeData convex_buf;
+        ConvexHull hull_b = detail::make_hull_from_shape(shape_a, box_buf, convex_buf);
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+        if (hit) { swap_contact(contact); }
+    }
+    // =======================================================================
+    // BOX – CYLINDER  (A=box, B=cylinder → GJK+EPA, negate)
+    // =======================================================================
+    else if (ta == ShapeType::Box && tb == ShapeType::Cylinder) {
+        CylinderShapeData cyl_buf;
+        ConvexHull hull_a = detail::make_cylinder_hull(shape_b, cyl_buf);
+        BoxShapeData box_buf;
+        ConvexPieceShapeData convex_buf;
+        ConvexHull hull_b = detail::make_hull_from_shape(shape_a, box_buf, convex_buf);
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+        if (hit) { swap_contact(contact); }
     }
     // =======================================================================
     // CONVEX PIECE – SPHERE  (A=convex, B=sphere → need B->A = sphere->convex)
     // =======================================================================
     else if (ta == ShapeType::ConvexPiece && tb == ShapeType::Sphere) {
         hit = detect_sphere_convex(shape_b, shape_a, contact);
-        // detect_sphere_convex returns B->A (convex->sphere = shape_a->shape_b)
-        // We need B->A = shape_b->shape_a → negate
-        if (hit) {
-            swap_contact(contact);
-        }
+        if (hit) { swap_contact(contact); }
+    }
+    // =======================================================================
+    // CONVEX PIECE – BOX  (GJK+EPA)
+    // =======================================================================
+    else if (ta == ShapeType::ConvexPiece && tb == ShapeType::Box) {
+        hit = detect_convex_convex(shape_a, shape_b, contact);
+    }
+    // =======================================================================
+    // CONVEX PIECE – CONVEX PIECE  (GJK+EPA)
+    // =======================================================================
+    else if (ta == ShapeType::ConvexPiece && tb == ShapeType::ConvexPiece) {
+        hit = detect_convex_convex(shape_a, shape_b, contact);
+    }
+    // =======================================================================
+    // CONVEX PIECE – PLANE  (A=convex, B=plane → need B->A = plane->convex)
+    // =======================================================================
+    else if (ta == ShapeType::ConvexPiece && tb == ShapeType::Plane) {
+        hit = detect_plane_convex(
+            shape_b.position, shape_b.plane_normal,
+            shape_a.position, shape_a.rotation,
+            shape_a.convex_vertices, shape_a.convex_vertex_count, contact);
+    }
+    // =======================================================================
+    // CONVEX PIECE – CAPSULE  (A=convex, B=capsule → GJK+EPA, negate)
+    // =======================================================================
+    else if (ta == ShapeType::ConvexPiece && tb == ShapeType::Capsule) {
+        CapsuleShapeData cap_buf;
+        ConvexHull hull_a = detail::make_capsule_hull(shape_b, cap_buf);
+        BoxShapeData box_buf;
+        ConvexPieceShapeData convex_buf;
+        ConvexHull hull_b = detail::make_hull_from_shape(shape_a, box_buf, convex_buf);
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+        if (hit) { swap_contact(contact); }
+    }
+    // =======================================================================
+    // CONVEX PIECE – CYLINDER  (A=convex, B=cylinder → GJK+EPA, negate)
+    // =======================================================================
+    else if (ta == ShapeType::ConvexPiece && tb == ShapeType::Cylinder) {
+        CylinderShapeData cyl_buf;
+        ConvexHull hull_a = detail::make_cylinder_hull(shape_b, cyl_buf);
+        BoxShapeData box_buf;
+        ConvexPieceShapeData convex_buf;
+        ConvexHull hull_b = detail::make_hull_from_shape(shape_a, box_buf, convex_buf);
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+        if (hit) { swap_contact(contact); }
     }
     // =======================================================================
     // PLANE – SPHERE  (A=plane, B=sphere → need B->A = sphere->plane)
@@ -656,14 +1015,215 @@ inline bool dispatch_detect(
         plane.point  = shape_a.position;
         plane.normal = shape_a.plane_normal;
         hit = detect_sphere_plane(shape_b.position, col, plane, contact);
-        // detect_sphere_plane returns plane->sphere = shape_a->shape_b = A->B
-        // We need B->A → negate
-        if (hit) {
-            swap_contact(contact);
-        }
+        if (hit) { swap_contact(contact); }
     }
     // =======================================================================
-    // PLANE vs BOX / PLANE vs CONVEX PIECE — not implemented for Sprint 3
+    // PLANE – BOX  (A=plane, B=box → need B->A = box->plane → negate)
+    // =======================================================================
+    else if (ta == ShapeType::Plane && tb == ShapeType::Box) {
+        hit = detect_plane_box(
+            shape_a.position, shape_a.plane_normal,
+            shape_b.position, shape_b.box_half_extents,
+            shape_b.rotation, contact);
+        if (hit) { swap_contact(contact); }
+    }
+    // =======================================================================
+    // PLANE – CONVEX PIECE  (A=plane, B=convex → need B->A = convex->plane → negate)
+    // =======================================================================
+    else if (ta == ShapeType::Plane && tb == ShapeType::ConvexPiece) {
+        hit = detect_plane_convex(
+            shape_a.position, shape_a.plane_normal,
+            shape_b.position, shape_b.rotation,
+            shape_b.convex_vertices, shape_b.convex_vertex_count, contact);
+        if (hit) { swap_contact(contact); }
+    }
+    // =======================================================================
+    // CAPSULE – SPHERE  (A=capsule, B=sphere → need B->A = sphere->capsule → negate)
+    // =======================================================================
+    else if (ta == ShapeType::Capsule && tb == ShapeType::Sphere) {
+        CapsuleShapeData cap_buf;
+        CapsuleShapeData& cap = cap_buf;
+        cap.radius = shape_a.capsule_radius;
+        cap.half_height = shape_a.capsule_half_height;
+        cap.position = shape_a.position;
+        cap.orientation = shape_a.orientation;
+        cap.rotation = shape_a.rotation;
+        cap.update_cache();
+        hit = detect_sphere_capsule(shape_b.position, shape_b.sphere_radius,
+                                     cap, contact);
+        if (hit) { swap_contact(contact); }
+    }
+    // =======================================================================
+    // CAPSULE – CAPSULE  (detect_capsule_capsule returns B->A ✓)
+    // =======================================================================
+    else if (ta == ShapeType::Capsule && tb == ShapeType::Capsule) {
+        CapsuleShapeData cap_a_buf;
+        cap_a_buf.radius = shape_a.capsule_radius;
+        cap_a_buf.half_height = shape_a.capsule_half_height;
+        cap_a_buf.position = shape_a.position;
+        cap_a_buf.orientation = shape_a.orientation;
+        cap_a_buf.rotation = shape_a.rotation;
+        cap_a_buf.update_cache();
+
+        CapsuleShapeData cap_b_buf;
+        cap_b_buf.radius = shape_b.capsule_radius;
+        cap_b_buf.half_height = shape_b.capsule_half_height;
+        cap_b_buf.position = shape_b.position;
+        cap_b_buf.orientation = shape_b.orientation;
+        cap_b_buf.rotation = shape_b.rotation;
+        cap_b_buf.update_cache();
+
+        hit = detect_capsule_capsule(cap_a_buf, cap_b_buf, contact);
+    }
+    // =======================================================================
+    // CAPSULE – BOX  (A=capsule, B=box → GJK+EPA)
+    // =======================================================================
+    else if (ta == ShapeType::Capsule && tb == ShapeType::Box) {
+        CapsuleShapeData cap_buf;
+        ConvexHull hull_a = detail::make_capsule_hull(shape_a, cap_buf);
+        BoxShapeData box_buf;
+        ConvexPieceShapeData convex_buf;
+        ConvexHull hull_b = detail::make_hull_from_shape(shape_b, box_buf, convex_buf);
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+    }
+    // =======================================================================
+    // CAPSULE – CONVEX PIECE  (GJK+EPA)
+    // =======================================================================
+    else if (ta == ShapeType::Capsule && tb == ShapeType::ConvexPiece) {
+        CapsuleShapeData cap_buf;
+        ConvexHull hull_a = detail::make_capsule_hull(shape_a, cap_buf);
+        BoxShapeData box_buf;
+        ConvexPieceShapeData convex_buf;
+        ConvexHull hull_b = detail::make_hull_from_shape(shape_b, box_buf, convex_buf);
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+    }
+    // =======================================================================
+    // CAPSULE – PLANE  (A=capsule, B=plane → normal B->A = plane->capsule)
+    // =======================================================================
+    else if (ta == ShapeType::Capsule && tb == ShapeType::Plane) {
+        CapsuleShapeData cap_buf;
+        cap_buf.radius = shape_a.capsule_radius;
+        cap_buf.half_height = shape_a.capsule_half_height;
+        cap_buf.position = shape_a.position;
+        cap_buf.orientation = shape_a.orientation;
+        cap_buf.rotation = shape_a.rotation;
+        cap_buf.update_cache();
+        hit = detect_capsule_plane(cap_buf, shape_b.position, shape_b.plane_normal, contact);
+    }
+    // =======================================================================
+    // CAPSULE – CYLINDER  (GJK+EPA)
+    // =======================================================================
+    else if (ta == ShapeType::Capsule && tb == ShapeType::Cylinder) {
+        CapsuleShapeData cap_buf;
+        ConvexHull hull_a = detail::make_capsule_hull(shape_a, cap_buf);
+        CylinderShapeData cyl_buf;
+        ConvexHull hull_b = detail::make_cylinder_hull(shape_b, cyl_buf);
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+    }
+    // =======================================================================
+    // CYLINDER – SPHERE  (A=cylinder, B=sphere → negate)
+    // =======================================================================
+    else if (ta == ShapeType::Cylinder && tb == ShapeType::Sphere) {
+        CylinderShapeData cyl_buf;
+        cyl_buf.radius = shape_a.cylinder_radius;
+        cyl_buf.half_height = shape_a.cylinder_half_height;
+        cyl_buf.position = shape_a.position;
+        cyl_buf.orientation = shape_a.orientation;
+        cyl_buf.rotation = shape_a.rotation;
+        cyl_buf.update_cache();
+        hit = detect_sphere_cylinder(shape_b.position, shape_b.sphere_radius,
+                                      cyl_buf, contact);
+        if (hit) { swap_contact(contact); }
+    }
+    // =======================================================================
+    // CYLINDER – BOX  (A=cylinder, B=box → GJK+EPA)
+    // =======================================================================
+    else if (ta == ShapeType::Cylinder && tb == ShapeType::Box) {
+        CylinderShapeData cyl_buf;
+        ConvexHull hull_a = detail::make_cylinder_hull(shape_a, cyl_buf);
+        BoxShapeData box_buf;
+        ConvexPieceShapeData convex_buf;
+        ConvexHull hull_b = detail::make_hull_from_shape(shape_b, box_buf, convex_buf);
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+    }
+    // =======================================================================
+    // CYLINDER – CONVEX PIECE  (GJK+EPA)
+    // =======================================================================
+    else if (ta == ShapeType::Cylinder && tb == ShapeType::ConvexPiece) {
+        CylinderShapeData cyl_buf;
+        ConvexHull hull_a = detail::make_cylinder_hull(shape_a, cyl_buf);
+        BoxShapeData box_buf;
+        ConvexPieceShapeData convex_buf;
+        ConvexHull hull_b = detail::make_hull_from_shape(shape_b, box_buf, convex_buf);
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+    }
+    // =======================================================================
+    // CYLINDER – PLANE  (GJK+EPA)
+    // =======================================================================
+    else if (ta == ShapeType::Cylinder && tb == ShapeType::Plane) {
+        CylinderShapeData cyl_buf;
+        ConvexHull hull_a = detail::make_cylinder_hull(shape_a, cyl_buf);
+        PlaneShapeData plane_data;
+        plane_data.normal = shape_b.plane_normal;
+        plane_data.point = shape_b.position;
+        plane_data.extent = 1000.0f;
+        ConvexHull hull_b;
+        hull_b.user_data = &plane_data;
+        hull_b.support = plane_support;
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+    }
+    // =======================================================================
+    // CYLINDER – CAPSULE  (GJK+EPA)
+    // =======================================================================
+    else if (ta == ShapeType::Cylinder && tb == ShapeType::Capsule) {
+        CylinderShapeData cyl_buf;
+        ConvexHull hull_a = detail::make_cylinder_hull(shape_a, cyl_buf);
+        CapsuleShapeData cap_buf;
+        ConvexHull hull_b = detail::make_capsule_hull(shape_b, cap_buf);
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+    }
+    // =======================================================================
+    // CYLINDER – CYLINDER  (GJK+EPA)
+    // =======================================================================
+    else if (ta == ShapeType::Cylinder && tb == ShapeType::Cylinder) {
+        CylinderShapeData cyl_a_buf;
+        ConvexHull hull_a = detail::make_cylinder_hull(shape_a, cyl_a_buf);
+        CylinderShapeData cyl_b_buf;
+        ConvexHull hull_b = detail::make_cylinder_hull(shape_b, cyl_b_buf);
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+    }
+    // =======================================================================
+    // PLANE – CAPSULE  (A=plane, B=capsule → negate)
+    // =======================================================================
+    else if (ta == ShapeType::Plane && tb == ShapeType::Capsule) {
+        CapsuleShapeData cap_buf;
+        cap_buf.radius = shape_b.capsule_radius;
+        cap_buf.half_height = shape_b.capsule_half_height;
+        cap_buf.position = shape_b.position;
+        cap_buf.orientation = shape_b.orientation;
+        cap_buf.rotation = shape_b.rotation;
+        cap_buf.update_cache();
+        hit = detect_capsule_plane(cap_buf, shape_a.position, shape_a.plane_normal, contact);
+        if (hit) { swap_contact(contact); }
+    }
+    // =======================================================================
+    // PLANE – CYLINDER  (A=plane, B=cylinder → GJK+EPA, negate)
+    // =======================================================================
+    else if (ta == ShapeType::Plane && tb == ShapeType::Cylinder) {
+        CylinderShapeData cyl_buf;
+        ConvexHull hull_a = detail::make_cylinder_hull(shape_b, cyl_buf);
+        PlaneShapeData plane_data;
+        plane_data.normal = shape_a.plane_normal;
+        plane_data.point = shape_a.position;
+        plane_data.extent = 1000.0f;
+        ConvexHull hull_b;
+        hull_b.user_data = &plane_data;
+        hull_b.support = plane_support;
+        hit = detail::gjk_epa_generic(hull_a, hull_b, contact);
+        if (hit) { swap_contact(contact); }
+    }
+    // =======================================================================
+    // Unknown pair — not implemented
     // =======================================================================
     else {
         return false;

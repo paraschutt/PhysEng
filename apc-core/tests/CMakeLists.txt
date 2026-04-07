@@ -81,3 +81,10 @@ add_test(NAME FrictionIntegration COMMAND test_friction)
 add_executable(test_solver_v2 integration/test_solver_v2.cpp)
 target_link_libraries(test_solver_v2 PRIVATE apc_core)
 add_test(NAME SolverV2Integration COMMAND test_solver_v2)
+
+# ---------------------------------------------------------
+# Sprint 4 Tests — Capsule, Cylinder, Plane-Box, Contact Manager
+# ---------------------------------------------------------
+add_executable(test_sprint4 correctness/test_sprint4.cpp)
+target_link_libraries(test_sprint4 PRIVATE apc_core)
+add_test(NAME Sprint4Correctness COMMAND test_sprint4)

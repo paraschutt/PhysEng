@@ -1,6 +1,7 @@
 #pragma once
 #include "apc_math_common.h"
 #include <cmath>
+#include <cstring>
 #include <functional> 
 
 namespace apc {
@@ -102,8 +103,10 @@ struct Vec3 {
     }
     
     // --- Comparison (for sorting, NOT for physics) ---
+    // equals_exact: bitwise comparison — +0.0f != -0.0f (IEEE 754 sign bit).
+    // This is important for deterministic replay where bit-exact state matters.
     APC_FORCEINLINE bool equals_exact(const Vec3& other) const {
-        return x == other.x && y == other.y && z == other.z;
+        return std::memcmp(this, &other, sizeof(Vec3)) == 0;
     }
     
     APC_FORCEINLINE bool equals_approx(const Vec3& other, float eps = APC_EPSILON) const {
