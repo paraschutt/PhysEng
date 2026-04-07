@@ -88,3 +88,31 @@ add_test(NAME SolverV2Integration COMMAND test_solver_v2)
 add_executable(test_sprint4 correctness/test_sprint4.cpp)
 target_link_libraries(test_sprint4 PRIVATE apc_core)
 add_test(NAME Sprint4Correctness COMMAND test_sprint4)
+
+# ---------------------------------------------------------
+# Sprint 5 Tests — Joint Types, Limits, Extended API
+# ---------------------------------------------------------
+add_executable(test_sprint5 correctness/test_sprint5.cpp)
+target_link_libraries(test_sprint5 PRIVATE apc_core)
+add_test(NAME Sprint5Correctness COMMAND test_sprint5)
+
+# ---------------------------------------------------------
+# Sprint 6 Tests — Blend Modes, Spring-Damper Pipeline
+# ---------------------------------------------------------
+add_executable(test_sprint6_blend integration/test_sprint6_blend.cpp)
+target_link_libraries(test_sprint6_blend PRIVATE apc_core)
+add_test(NAME Sprint6BlendIntegration COMMAND test_sprint6_blend)
+
+# ---------------------------------------------------------
+# Sprint 7 Tests — Skeleton-Collision Integration
+# ---------------------------------------------------------
+add_executable(test_sprint7_collision integration/test_sprint7_collision.cpp)
+target_link_libraries(test_sprint7_collision PRIVATE apc_core)
+add_test(NAME Sprint7CollisionIntegration COMMAND test_sprint7_collision)
+
+# ---------------------------------------------------------
+# Sprint 8 Tests — Humanoid Demo, Loop Closures, Standing & Knock-Over
+# ---------------------------------------------------------
+add_executable(test_sprint8_humanoid integration/test_sprint8_humanoid.cpp)
+target_link_libraries(test_sprint8_humanoid PRIVATE apc_core)
+add_test(NAME Sprint8HumanoidIntegration COMMAND test_sprint8_humanoid)

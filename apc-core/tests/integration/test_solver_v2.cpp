@@ -52,7 +52,7 @@ static void hash_float(uint64_t& h, float f) {
 // ---------------------------------------------------------------------------
 // Helper: create a default dynamic sphere rigid body
 // ---------------------------------------------------------------------------
-static RigidBody make_sphere_body(uint32_t id, const Vec3& pos, float radius, float mass = 1.0f) {
+static RigidBody make_sphere_body(uint32_t /*id*/, const Vec3& pos, float radius, float mass = 1.0f) {
     RigidBody b;
     b.position = pos;
     b.linear_velocity = Vec3(0, 0, 0);
@@ -70,7 +70,7 @@ static RigidBody make_sphere_body(uint32_t id, const Vec3& pos, float radius, fl
 // ---------------------------------------------------------------------------
 // Helper: create a static (infinite mass) body
 // ---------------------------------------------------------------------------
-static RigidBody make_static_body(uint32_t id, const Vec3& pos) {
+static RigidBody make_static_body(uint32_t /*id*/, const Vec3& pos) {
     RigidBody b;
     b.position = pos;
     b.linear_velocity = Vec3(0, 0, 0);
