@@ -172,3 +172,10 @@ add_test(NAME Sprint15Correctness COMMAND test_sprint15)
 add_executable(test_sprint16 integration/test_sprint16.cpp)
 target_link_libraries(test_sprint16 PRIVATE apc_core)
 add_test(NAME Sprint16Integration COMMAND test_sprint16)
+
+# ---------------------------------------------------------
+# Sprint 17 Tests — Render Foundation & Debug Draw
+# ---------------------------------------------------------
+add_executable(test_sprint17 correctness/test_sprint17.cpp)
+target_link_libraries(test_sprint17 PRIVATE apc_core)
+add_test(NAME Sprint17Correctness COMMAND test_sprint17)
