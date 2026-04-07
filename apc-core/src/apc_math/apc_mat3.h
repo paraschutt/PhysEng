@@ -1,12 +1,11 @@
 #pragma once
-#include "apc_vec3.h"
-#include "apc_quat.h"
+#include "apc_math/apc_vec3.h"
+#include "apc_math/apc_quat.h"
 #include <cmath>
 
 namespace apc {
 
-// Column-major 3x3 matrix (standard for graphics/physics)
-// m[0..2] = Col0, m[3..5] = Col1, m[6..8] = Col2
+// Column-major 3x3 matrix
 struct Mat3 {
     float m[9];
 
@@ -39,24 +38,12 @@ struct Mat3 {
         }};
     }
 
-    // 3x3 Inverse via Cofactors (Deterministic: no row-pivoting variance like Gauss-Jordan)
-    APC_FORCEINLINE Mat3 inverse() const {
-        float a = m[0], b = m[1], c = m[2];
-        float d = m[3], e = m[4], f = m[5];
-        float g = m[6], h = m[7], i = m[8];
+    // Declarations only - Implementations moved to apc_mat3.cpp to avoid MSVC duplicate body errors
+    static Mat3 multiply(const Mat3& a, const Mat3& b);
 
-        float det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-        
-        if (std::abs(det) < APC_EPSILON) return identity(); // Degenerate fallback
-        
-        float inv_det = 1.0f / det;
-
-        return Mat3{{
-            (e * i - f * h) * inv_det, (c * h - b * i) * inv_det, (b * f - c * e) * inv_det,
-            (f * g - d * i) * inv_det, (a * i - c * g) * inv_det, (c * d - a * f) * inv_det,
-            (d * h - e * g) * inv_det, (b * g - a * h) * inv_det, (a * e - b * d) * inv_det
-        }};
-    }
+    // Element-wise addition
+    static Mat3 add(const Mat3& a, const Mat3& b);
+    Mat3 inverse() const;
 
     // Extract diagonal (used for world-space inertia scaling)
     APC_FORCEINLINE Vec3 diagonal() const {

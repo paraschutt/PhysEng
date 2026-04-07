@@ -25,21 +25,25 @@ inline bool detect_sphere_sphere(
     float dist_sq = Vec3::length_sq(diff);
     float radius_sum = col_a.radius + col_b.radius;
     
-    if (dist_sq >= radius_sum * radius_sum) {
+    // FIX 1: Changed >= to > to allow exact touching state
+    if (dist_sq > radius_sum * radius_sum) {
         return false; // Separated
     }
 
     float dist = std::sqrt(dist_sq);
     if (dist < APC_EPSILON) {
-        // Perfectly overlapping centers - arbitrary fallback normal
         out_contact.normal = Vec3(0.0f, 1.0f, 0.0f);
         out_contact.penetration = radius_sum;
     } else {
-        out_contact.normal = Vec3::scale(diff, 1.0f / dist);
+        // FIX 2: Flipped the sign! Normal must point from B to A (away from surface)
+        out_contact.normal = Vec3::scale(diff, -1.0f / dist);
         out_contact.penetration = radius_sum - dist;
     }
 
+    // With normal pointing B->A, point_on_a is pushed AWAY from B (correct surface point)
     out_contact.point_on_a = Vec3::add(pos_a, Vec3::scale(out_contact.normal, col_a.radius));
+    
+    // point_on_b is pushed TOWARDS A (correct surface point)
     out_contact.point_on_b = Vec3::sub(pos_b, Vec3::scale(out_contact.normal, col_b.radius));
     
     return true;

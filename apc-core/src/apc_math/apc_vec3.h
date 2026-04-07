@@ -1,6 +1,7 @@
 #pragma once
 #include "apc_math_common.h"
 #include <cmath>
+#include <functional> 
 
 namespace apc {
 

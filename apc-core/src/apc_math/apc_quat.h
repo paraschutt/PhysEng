@@ -4,6 +4,10 @@
 
 namespace apc {
 
+// Forward declaration: apc_mat3.h includes apc_quat.h, 
+// so we must forward declare Mat3 here to avoid circular includes.
+struct Mat3;
+
 struct Quat {
     float x, y, z, w;
 
@@ -20,6 +24,12 @@ struct Quat {
         return Quat(axis.x * s, axis.y * s, axis.z * s, c);
     }
 
+    // Declaration only! Implementation is in apc_quat.cpp (which includes apc_mat3.h)
+    static Quat from_rotation_matrix(const Mat3& m);
+
+    // Extract rotation matrix from quaternion
+    Mat3 to_mat3() const;
+
     // Hamilton product (strict ordering: x,y,z,w)
     APC_FORCEINLINE static Quat multiply(const Quat& a, const Quat& b) {
         return Quat(
@@ -32,7 +42,6 @@ struct Quat {
 
     // Rotate a vector by this quaternion
     APC_FORCEINLINE Vec3 rotate(const Vec3& v) const {
-        // Optimized formula: t = 2 * cross(q.xyz, v), result = v + q.w * t + cross(q.xyz, t)
         Vec3 qv = Vec3(x, y, z);
         Vec3 t = Vec3::scale(Vec3::cross(qv, v), 2.0f);
         return Vec3::add(v, Vec3::add(Vec3::scale(t, w), Vec3::cross(qv, t)));
@@ -43,6 +52,11 @@ struct Quat {
         if (len_sq < APC_EPSILON_SQ) return identity();
         float inv_len = 1.0f / std::sqrt(len_sq);
         return Quat(q.x * inv_len, q.y * inv_len, q.z * inv_len, q.w * inv_len);
+    }
+
+    // Inverse of a normalized quaternion (just flips the axis)
+    APC_FORCEINLINE static Quat inverse(const Quat& q) {
+        return Quat(-q.x, -q.y, -q.z, q.w);
     }
 };
 

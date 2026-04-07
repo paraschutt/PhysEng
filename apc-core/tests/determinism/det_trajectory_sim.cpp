@@ -2,9 +2,9 @@
 #include "apc_math/apc_quat.h"
 #include "apc_math/apc_mat3.h"
 #include "apc_platform/apc_fp_mode.h"
-
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 namespace apc::test {
 
@@ -21,10 +21,13 @@ struct HashAccumulator {
     }
     
     void add_float(float f) {
-        // Hash the bits, not the value (so -0 and +0 differ, NaN is consistent)
         uint32_t bits;
-        __builtin_memcpy(&bits, &f, sizeof(bits));
+        std::memcpy(&bits, &f, sizeof(bits));
         add_bytes(&bits, sizeof(bits));
+    }
+    
+    void add_uint32(uint32_t val) {
+        add_bytes(&val, sizeof(val));
     }
     
     void add_vec3(const Vec3& v) {
@@ -44,7 +47,6 @@ struct HashAccumulator {
 };
 
 // Simulate a simple projectile with spin, air resistance, and ground bounce
-// This exercises: vec3 ops, quat rotation, mat3 transform, sqrt, branching
 struct TrajectorySim {
     Vec3 position;
     Vec3 velocity;
@@ -60,10 +62,8 @@ struct TrajectorySim {
     static constexpr float GROUND_Y = 0.0f;
     
     void step(HashAccumulator& hash) {
-        // Gravity
         velocity.y -= 9.81f * DT;
         
-        // Air drag (velocity-squared, simplified)
         float speed_sq = Vec3::length_sq(velocity);
         if (speed_sq > 0.0001f) {
             float speed = std::sqrt(speed_sq);
@@ -77,10 +77,8 @@ struct TrajectorySim {
             }
         }
         
-        // Integrate position
         position = Vec3::add(position, Vec3::scale(velocity, DT));
         
-        // Integrate orientation (simplified)
         float ang_speed = Vec3::length(angular_velocity);
         if (ang_speed > 0.0001f) {
             Vec3 axis = Vec3::scale(angular_velocity, 1.0f / ang_speed);
@@ -90,30 +88,23 @@ struct TrajectorySim {
             orientation = Quat::normalize(orientation);
         }
         
-        // Angular damping
         angular_velocity = Vec3::scale(angular_velocity, 1.0f - angular_damping * DT);
         
-        // Ground collision
         if (position.y < GROUND_Y) {
             position.y = GROUND_Y;
             
             if (velocity.y < 0.0f) {
                 velocity.y = -velocity.y * restitution;
-                
-                // Friction on bounce (simplified)
                 velocity.x *= 0.95f;
                 velocity.z *= 0.95f;
                 
-                // Spin transfer to horizontal velocity (Magnus-like)
                 Vec3 spin_axis = Vec3::cross(angular_velocity, Vec3(0.0f, 1.0f, 0.0f));
                 velocity = Vec3::scaled_add(velocity, spin_axis, 0.1f * DT);
             }
             
-            // Angular velocity damping on ground contact
             angular_velocity = Vec3::scale(angular_velocity, 0.98f);
         }
         
-        // Hash state
         hash.add_vec3(position);
         hash.add_vec3(velocity);
         hash.add_quat(orientation);
@@ -127,7 +118,6 @@ int main(int argc, char* argv[]) {
     using namespace apc;
     using namespace apc::test;
     
-    // Step 1: Enforce FP mode
     FPUState fp_state = enforce_deterministic_fp_mode();
     if (!fp_state.is_valid) {
         std::fprintf(stderr, "FATAL: Could not enforce deterministic FP mode\n");
@@ -135,28 +125,21 @@ int main(int argc, char* argv[]) {
     }
     std::fprintf(stdout, "FP mode enforced successfully\n");
     
-    // Step 2: Query capabilities (informational)
-    FPCapabilities caps = query_fp_capabilities();
-    std::fprintf(stdout, "FMA available: %s (will be disabled via compiler flags)\n", 
-                 caps.has_fma_that_breaks_determinism ? "YES" : "NO");
-    
-    // Step 3: Run trajectory simulation
-    const int NUM_STEPS = 100000;  // ~416 seconds of sim time at 240Hz
-    const int HASH_INTERVAL = 100; // Hash every 100 steps for smaller output
-    
+    const int NUM_STEPS = 100000;
+    const int HASH_INTERVAL = 100;
+
     TrajectorySim sim;
     sim.position = Vec3(0.0f, 10.0f, 0.0f);
-    sim.velocity = Vec3(15.0f, 20.0f, 5.0f);  // Thrown at angle
+    sim.velocity = Vec3(15.0f, 20.0f, 5.0f);
     sim.orientation = Quat::identity();
-    sim.angular_velocity = Vec3(50.0f, 10.0f, -30.0f);  // Spinning
-    sim.mass = 0.45f;           // ~1 lb (football)
+    sim.angular_velocity = Vec3(50.0f, 10.0f, -30.0f);
+    sim.mass = 0.45f;
     sim.drag_coeff = 0.001f;
     sim.restitution = 0.6f;
     sim.angular_damping = 0.5f;
     
     HashAccumulator final_hash;
     
-    // Also hash initial conditions
     final_hash.add_vec3(sim.position);
     final_hash.add_vec3(sim.velocity);
     final_hash.add_quat(sim.orientation);
@@ -180,10 +163,9 @@ int main(int argc, char* argv[]) {
         
         sim.step(final_hash);
         
-        // Periodic intermediate hashes (catches mid-sim divergence)
         if ((i % HASH_INTERVAL) == 0) {
             HashAccumulator checkpoint;
-            checkpoint.add_int(i);
+            checkpoint.add_uint32(i);
             checkpoint.add_vec3(sim.position);
             std::fprintf(stdout, "  [%6d] pos=(%.6f, %.6f, %.6f) hash=%016llx\n",
                         i, sim.position.x, sim.position.y, sim.position.z,
@@ -191,13 +173,18 @@ int main(int argc, char* argv[]) {
         }
     }
     
-    // Step 4: Output final hash
     uint64_t result = final_hash.finalize();
     std::fprintf(stdout, "\n=== DETERMINISM RESULT ===\n");
     std::fprintf(stdout, "Final hash: %016llx\n", (unsigned long long)result);
-    std::fprintf(stdout, "Platform: %s\n", APC_PLATFORM_STRING);
-    std::fprintf(stdout, "Compiler: %s\n", APC_COMPILER_STRING);
-    std::fprintf(stdout, "Build type: %s\n", APC_BUILD_TYPE_STRING);
+    
+#if defined(_MSC_VER)
+    std::fprintf(stdout, "Platform: x64 (MSVC)\n");
+#elif defined(__clang__)
+    std::fprintf(stdout, "Platform: Clang\n");
+#else
+    std::fprintf(stdout, "Platform: GCC\n");
+#endif
+    
     std::fprintf(stdout, "==========================\n");
     
     return 0;

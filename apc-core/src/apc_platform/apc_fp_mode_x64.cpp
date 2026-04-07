@@ -1,97 +1,125 @@
 #include "apc_fp_mode.h"
-#include <cstdint>
-#include <immintrin.h>
 
-#ifdef APC_PLATFORM_X64
+#if APC_PLATFORM_X64
+
+#if defined(_MSC_VER)
+    #include <intrin.h>
+    #include <float.h>  // ADDED: Required for _controlfp_s, _MCW_DN, _RC_NEAR
+#else
+    #include <immintrin.h>
+#endif
 
 namespace apc {
 
 FPUState enforce_deterministic_fp_mode() {
     FPUState result = {};
     
-    // --- SSE Control Word ---
-    // Bits we SET:
-    //   bit 15 (FZ): Flush-to-zero (denormals → zero)
-    //   bit  6 (DAZ): Denormals-are-zero on load
-    // Bits we CLEAR:
-    //   bits 13-14 (RC): Round-to-nearest-even (00)
-    //   bit 12 (PM): Precision mask (we WANT exceptions in debug)
-    
+#if defined(_MSC_VER)
+    // MSVC x64: No inline assembly allowed. Use _controlfp_s.
+    unsigned int current_cw = 0;
+    _controlfp_s(&current_cw, 0, 0); // Get current state
+
+    // _MCW_DN: Denormal control (FTZ + DAZ)
+    // _DN_FLUSH: Flush denormals to zero
+    // _MCW_RC: Rounding control
+    // _RC_NEAR: Round to nearest
+    unsigned int new_cw = _DN_FLUSH | _RC_NEAR;
+    _controlfp_s(&current_cw, new_cw, _MCW_DN | _MCW_RC);
+
+    // x87 is effectively unused in 64-bit Windows, so we don't touch it.
+    result.raw_state = static_cast<uint64_t>(current_cw) << 32;
+#else
+    // GCC/Clang x64: SSE + x87 inline assembly
     unsigned int sse_cw = _mm_getcsr();
+    sse_cw |= (1u << 15); // FZ
+    sse_cw |= (1u << 6);  // DAZ
+    sse_cw &= ~(3u << 13); // RC
     
-    // Enable flush-to-zero and denormals-are-zero
-    sse_cw |= (1u << 15);  // FZ
-    sse_cw |= (1u << 6);   // DAZ
-    
-    // Force round-to-nearest-even
-    sse_cw &= ~(3u << 13); // Clear RC bits
-    
-    // In DEBUG, unmask precision exception to catch denormal issues
 #ifndef NDEBUG
-    sse_cw &= ~(1u << 12); // Clear PM mask
+    sse_cw &= ~(1u << 12); // PM
 #endif
     
     _mm_setcsr(sse_cw);
-    result.raw_state = ((uint64_t)sse_cw << 32);
-    
-    // --- x87 Control Word (legacy, but still exists) ---
-    // Force 64-bit extended precision, round-to-nearest
+    result.raw_state = (static_cast<uint64_t>(sse_cw) << 32);
+
     unsigned short x87_cw;
     __asm__ __volatile__("fnstcw %0" : "=m"(x87_cw));
-    
-    x87_cw &= ~(3u << 10);  // RC = round-to-nearest
-    x87_cw &= ~(3u << 8);   // PC = 64-bit extended (doesn't matter if we only use SSE)
-    x87_cw |= (3u << 8);    // Actually, double precision is fine, we only use SSE
-    
+    x87_cw &= ~(3u << 10);  
+    x87_cw &= ~(3u << 8);   
+    x87_cw |= (2u << 8);   
     __asm__ __volatile__("fldcw %0" : : "m"(x87_cw));
-    result.raw_state |= x87_cw;
-    
+    result.raw_state |= static_cast<uint64_t>(x87_cw);
+#endif
+
     result.is_valid = true;
-    
-    // VERIFY we got what we asked for
-    unsigned int verify_sse = _mm_getcsr();
-    if ((verify_sse & 0xC060) != (sse_cw & 0xC060)) {
-        // Failed to set FZ+DAZ - CRASH
-        __builtin_trap();
+
+    // Verification
+#if defined(_MSC_VER)
+    unsigned int verify_cw = 0;
+    _controlfp_s(&verify_cw, 0, 0);
+    if ((verify_cw & _MCW_DN) != _DN_FLUSH || (verify_cw & _MCW_RC) != _RC_NEAR) {
+        __debugbreak(); // MSVC trap
     }
+#else
+    unsigned int verify_sse = _mm_getcsr();
+    unsigned int expected_sse = static_cast<unsigned int>(result.raw_state >> 32);
+    const unsigned int mask = (1u << 15) | (1u << 6) | (3u << 13);
+    if ((verify_sse & mask) != (expected_sse & mask)) {
+        __builtin_trap(); // GCC/Clang trap
+    }
+#endif
     
     return result;
 }
 
 bool verify_fp_mode(const FPUState& expected) {
+#if defined(_MSC_VER)
+    unsigned int current = 0;
+    _controlfp_s(&current, 0, 0);
+    unsigned int expected_cw = static_cast<unsigned int>(expected.raw_state >> 32);
+    
+    // Create a mask for the bits we care about
+    unsigned int mask = _MCW_DN | _MCW_RC;
+    return (current & mask) == (expected_cw & mask);
+#else
     unsigned int current = _mm_getcsr();
     unsigned int expected_sse = static_cast<unsigned int>(expected.raw_state >> 32);
-    
-    // Only check the bits we care about
     const unsigned int mask = (1u << 15) | (1u << 6) | (3u << 13);
     return (current & mask) == (expected_sse & mask);
+#endif
 }
 
 void restore_fp_mode(const FPUState& state) {
+#if defined(_MSC_VER)
+    unsigned int target_cw = static_cast<unsigned int>(state.raw_state >> 32);
+    _controlfp_s(nullptr, target_cw, _MCW_DN | _MCW_RC);
+#else
     unsigned int sse_cw = static_cast<unsigned int>(state.raw_state >> 32);
     _mm_setcsr(sse_cw);
-    
     unsigned short x87_cw = static_cast<unsigned short>(state.raw_state & 0xFFFF);
     __asm__ __volatile__("fldcw %0" : : "m"(x87_cw));
+#endif
 }
 
 FPCapabilities query_fp_capabilities() {
     FPCapabilities caps = {};
-    
-    // x64 always supports FTZ/DAZ via SSE
     caps.supports_flush_denormals_to_zero = true;
     caps.supports_denormals_are_zero = true;
     caps.supports_strict_rounding = true;
     
-    // FMA: Check CPUID for FMA support
-    // If FMA is available, we must NOT use -mfma or it will fuse multiplies
+#if defined(_MSC_VER)
+    // MSVC __cpuid takes an array
+    int cpu_info[4];
+    __cpuid(cpu_info, 1);
+    caps.has_fma_that_breaks_determinism = (cpu_info[2] & (1 << 12)) != 0;
+#else
     uint32_t eax, ebx, ecx, edx;
     __cpuid(1, eax, ebx, ecx, edx);
     caps.has_fma_that_breaks_determinism = (ecx & (1 << 12)) != 0;
+#endif
     
     return caps;
 }
 
 } // namespace apc
-
 #endif // APC_PLATFORM_X64
