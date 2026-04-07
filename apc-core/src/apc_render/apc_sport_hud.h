@@ -139,6 +139,7 @@ struct SportHUDConfig {
 struct ScoreEventFlash {
     bool active = false;
     float trigger_time = 0.0f;
+    float event_game_time = 0.0f;  // Original game time for dedup
     const char* score_type = "";
     uint32_t team_id = 0;
     float points = 0.0f;
@@ -194,8 +195,8 @@ struct SportHUD {
                 if (ev.valid && flash_count < MAX_FLASHES) {
                     bool already_flashed = false;
                     for (uint32_t j = 0u; j < flash_count; ++j) {
-                        if (flashes[j].trigger_time >= ev.game_time - 0.001f &&
-                            flashes[j].trigger_time <= ev.game_time + 0.001f) {
+                        if (flashes[j].event_game_time >= ev.game_time - 0.001f &&
+                            flashes[j].event_game_time <= ev.game_time + 0.001f) {
                             already_flashed = true;
                             break;
                         }
@@ -203,7 +204,8 @@ struct SportHUD {
                     if (!already_flashed) {
                         ScoreEventFlash& f = flashes[flash_count++];
                         f.active = true;
-                        f.trigger_time = ev.game_time;
+                        f.trigger_time = current_time;
+                        f.event_game_time = ev.game_time;
                         f.score_type = ev.score_type;
                         f.team_id = ev.scorer_team_id;
                         f.points = ev.points;

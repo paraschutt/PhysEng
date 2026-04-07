@@ -35,9 +35,9 @@ namespace apc {
 // =============================================================================
 struct FieldSurfaceVisual {
     SurfaceType surface = SurfaceType::GRASS;
-    RenderColor ground_color = RenderColor::GREEN();
+    RenderColor ground_color = RenderColor(0.2f, 0.6f, 0.15f, 1.0f);
     RenderColor line_color = RenderColor::WHITE();
-    float grid_spacing = 1.0f;
+    float grid_spacing = 0.0f;
 
     /// Get default ground color for a surface type.
     static RenderColor get_surface_color(SurfaceType surface) {
