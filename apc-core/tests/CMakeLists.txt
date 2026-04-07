@@ -193,3 +193,10 @@ add_test(NAME Sprint18Correctness COMMAND test_sprint18)
 add_executable(test_sprint19 correctness/test_sprint19.cpp)
 target_link_libraries(test_sprint19 PRIVATE apc_core)
 add_test(NAME Sprint19Correctness COMMAND test_sprint19)
+
+# ---------------------------------------------------------
+# Sprint 20 Tests — Camera Systems, VFX Integration & Multi-Viewport
+# ---------------------------------------------------------
+add_executable(test_sprint20 correctness/test_sprint20.cpp)
+target_link_libraries(test_sprint20 PRIVATE apc_core)
+add_test(NAME Sprint20Correctness COMMAND test_sprint20)
