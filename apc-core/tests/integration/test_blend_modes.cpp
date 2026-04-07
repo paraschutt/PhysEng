@@ -7,37 +7,33 @@
 #include <cmath>
 #include <cstring>
 
-// Helper to manually set a bone's acceleration
-void set_bone_acceleration(SkeletalDynamicState& state, uint32_t bone_idx, float q_ddot) {
-    state.joint_accelerations[bone_idx] = q_ddot;
-}
-
 int main() {
     apc::enforce_deterministic_fp_mode();
     std::printf("Running 6-Bone Blend Modes Test...\n");
 
     apc::SkeletalAsset asset;
     std::vector<apc::Vec3> axes;
-    axes.push_back(apc::Vec3(0.0f, 1.0f, 0.space)); // Root: Y axis
-    axes.push_back(apc::Vec3(0.0f, 1.0f, 0.0f)); // Spine: Y axis
-    axes.push_back(apc::Vec3(0.0f, 1.0f, 0.0f)); // Head: Y axis
-    axes.push_back(apc::Vec3(0.0f, 0.0f, 1.0f)); // Upper arms: Z axis
-    axes.push_back(apc::Vec3(0.0f, 0.0f, 1.0f)); // Lower arms: Z axis
-    axes.push_back(0.0f); // Hips: No axis (Root is kinematic)
+    axes.push_back(apc::Vec3(0.0f, 1.0f, 0.0f));  // FIX: was "0.space"
+    axes.push_back(apc::Vec3(0.0f, 1.0f, 0.0f));  // Spine: Y axis
+    axes.push_back(apc::Vec3(0.0f, 1.0f, 0.0f));  // Head: Y axis
+    axes.push_back(apc::Vec3(0.0f, 0.0f, 1.0f));  // Upper arms: Z axis
+    axes.push_back(apc::Vec3(0.0f, 0.0f, 1.0f));  // Lower arms: Z axis
+    axes.push_back(apc::Vec3(0.0f, 1.0f, 0.0f));  // FIX: was push_back(0.0f) — type mismatch
 
     // --- Setup Bones ---
-    auto make_bone = [](uint32_t parent, Vec3 local_offset, float mass, float inertia) -> apc::Bone {
+    auto make_bone = [](uint32_t parent, apc::Vec3 local_offset, float mass, float inertia) -> apc::Bone {
+        // FIX: lambda used unqualified Vec3, now uses apc::Vec3
         apc::Bone b;
         b.parent_index = parent;
         b.bind_pose.translation = local_offset;
-        b.joint_to_com = Vec3(0.0f, -0.5f, 0.0f); // Mass hangs below joint
+        b.joint_to_com = apc::Vec3(0.0f, -0.5f, 0.0f); // Mass hangs below joint
         b.inverse_mass = 1.0f / mass;
         float inv_I = 1.0f / inertia;
         b.local_inverse_inertia = apc::Mat3{{inv_I, 0.0f, 0.0f, 0.0f, inv_I, 0.0f, 0.0f, 0.0f, inv_I}};
         return b;
     };
 
-    asset.bones.push_back(make_bone(-1, apc::Vec3(0.0f, 0.0f, 0.0f), 0.0f, 1000.0f)); // 0: Hips (Static Root)
+    asset.bones.push_back(make_bone(0xFFFFFFFF, apc::Vec3(0.0f, 0.0f, 0.0f), 0.0f, 1000.0f)); // 0: Hips (Static Root)
     asset.bones.push_back(make_bone(0, apc::Vec3(0.0f, 1.0f, 0.0f), 10.0f, 100.0f)); // 1: Spine
     asset.bones.push_back(make_bone(1, apc::Vec3(0.0f, 1.0f, 0.0f), 5.0f, 25.0f));  // 2: Head
     asset.bones.push_back(make_bone(2, apc::Vec3(1.0f, 1.0f, 0.0f), 5.0f, 25.0f));  // 3: Upper Arm Pivot
@@ -62,12 +58,17 @@ int main() {
     }
 
     // 2. Save the settled pose as the "Target Animation Target"
+    apc::SkeletalPose world_pose_for_com;
+    world_pose_for_com.allocate(asset.get_bone_count());
+    apc::SkeletalFK::calculate_world_transforms(asset, pose, world_pose_for_com);
+
     for (uint32_t i = 0; i < asset.get_bone_count(); ++i) {
         pose.target.target_local_transforms[i] = pose.local_transforms[i];
-        pose.target.target_world_coms = apc::SkeletalFK::get_world_com(asset, pose); 
+        // FIX: get_world_com requires 3 args (asset, world_pose, bone_index)
+        pose.target.target_world_coms[i] = apc::SkeletalFK::get_world_com(asset, world_pose_for_com, i);
     }
 
-    // 3. Switch Uppers to PHYSICS_DRIVEN and inject "Tackle" velocity
+    // 3. Switch Upper Arms to PHYSICS_DRIVEN and inject "Tackle" velocity
     asset.bones[3].physics.mode = apc::PhysicsBlendMode::PHYSICS_DRIVEN;
     asset.bones[4].physics.mode = apc::PhysicsBlendMode::PHYSICS_DRIVEN;
     
@@ -82,9 +83,9 @@ int main() {
 
     // 5. Switch Upper Arms to BLENDED (Spring-damper back to target)
     asset.bones[3].physics.mode = apc::PhysicsBlendMode::BLENDED;
-    asset.bones[3].physics.stiffness = 50.0f;  // Strong pull
-    asset.bones[3].physics.damping = 5.0f;     // Resistance to motion
-    asset.bones[3].physics.max_deviation = 1.0f;     // Break threshold
+    asset.bones[3].physics.stiffness = 50.0f;      // Strong pull
+    asset.bones[3].physics.damping = 5.0f;         // Resistance to motion
+    asset.bones[3].physics.max_deviation = 1.0f;   // Break threshold
 
     asset.bones[4].physics.mode = apc::PhysicsBlendMode::BLENDED;
     asset.bones[4].physics.stiffness = 40.0f;
@@ -97,6 +98,7 @@ int main() {
     }
 
     // 6. VERIFICATION
+    // FIX: allocate the pose before using it for FK output
     apc::SkeletalPose final_world_pose;
     final_world_pose.allocate(asset.get_bone_count());
     apc::SkeletalFK::calculate_world_transforms(asset, pose, final_world_pose);
@@ -131,8 +133,9 @@ int main() {
     for (uint32_t i = 0; i < asset.get_bone_count(); ++i) {
         float px = final_world_pose.world_transforms[i].translation.x;
         float py = final_world_pose.world_transforms[i].translation.y;
-        float pz = final_world_pose-world_transforms[i].translation.z;
-        if (std::isnan(px) || std::isnan(py) || std::isinf(px)) {
+        // FIX: was "final_world_pose-world_transforms" (dash instead of dot)
+        float pz = final_world_pose.world_transforms[i].translation.z;
+        if (std::isnan(px) || std::isnan(py) || std::isnan(pz) || std::isinf(px) || std::isinf(py) || std::isinf(pz)) {
             std::printf("[FAIL] Explosion detected in bone %d\n", i);
             return 1;
         }

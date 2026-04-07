@@ -17,14 +17,14 @@ struct OBB {
 
     // Transform a point from local OBB space to world space
     Vec3 local_to_world(const Vec3& local) const {
-        return Vec3::add(center, rotation.rotate(local));
+        return Vec3::add(center, rotation.transform_vec(local));
     }
 
     // Transform a world direction to local OBB space (no translation)
     Vec3 world_to_local_dir(const Vec3& world) const {
         // Fast inverse rotation = transpose
         Mat3 inv_rot = rotation.transpose();
-        return inv_rot.rotate(world);
+        return inv_rot.transform_vec(world);
     }
 };
 

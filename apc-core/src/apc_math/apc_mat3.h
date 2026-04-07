@@ -49,6 +49,17 @@ struct Mat3 {
     APC_FORCEINLINE Vec3 diagonal() const {
         return Vec3(m[0], m[4], m[8]);
     }
+
+    // Transform a vector by this matrix: out = M * v
+    // Column-major layout: out.x = v.x*m[0] + v.y*m[3] + v.z*m[6], etc.
+    // Explicitly ordered to prevent compiler FP reordering.
+    APC_FORCEINLINE Vec3 transform_vec(const Vec3& v) const {
+        return Vec3(
+            v.x * m[0] + v.y * m[3] + v.z * m[6],
+            v.x * m[1] + v.y * m[4] + v.z * m[7],
+            v.x * m[2] + v.y * m[5] + v.z * m[8]
+        );
+    }
 };
 
 } // namespace apc

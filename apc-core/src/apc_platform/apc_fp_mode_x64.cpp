@@ -7,6 +7,7 @@
     #include <float.h>  // ADDED: Required for _controlfp_s, _MCW_DN, _RC_NEAR
 #else
     #include <immintrin.h>
+    #include <cpuid.h>  // GCC/Clang: __cpuid intrinsic
 #endif
 
 namespace apc {
@@ -113,8 +114,8 @@ FPCapabilities query_fp_capabilities() {
     __cpuid(cpu_info, 1);
     caps.has_fma_that_breaks_determinism = (cpu_info[2] & (1 << 12)) != 0;
 #else
-    uint32_t eax, ebx, ecx, edx;
-    __cpuid(1, eax, ebx, ecx, edx);
+    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+    __get_cpuid(1, &eax, &ebx, &ecx, &edx);
     caps.has_fma_that_breaks_determinism = (ecx & (1 << 12)) != 0;
 #endif
     
