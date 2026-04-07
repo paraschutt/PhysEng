@@ -3,10 +3,9 @@
 #include "apc_collision/apc_sphere_sphere.h" // Pulls in canonical ContactPoint definition
 #include "apc_math/apc_vec3.h"
 #include <vector>
+#include <cmath>
 
 namespace apc {
-
-// REMOVED duplicate ContactPoint struct here
 
 struct VelocityConstraint {
     uint32_t id_a;
@@ -17,11 +16,21 @@ struct VelocityConstraint {
     Vec3 r_b;
     float penetration;
     float normal_mass;
-    float accumulated_impulse;
+
+    // Normal impulse accumulation (clamped >= 0)
+    float accumulated_normal_impulse;
+
+    // Tangential (friction) impulse accumulation
+    Vec3 accumulated_friction_impulse;
+    float friction_mass;  // Effective mass for tangential direction
 };
 
 class Solver3D {
 public:
+    // Friction coefficient (Coulomb model). 0.0 = frictionless, 1.0 = high grip.
+    // Can be tuned per-scenario. Default provides noticeable but not extreme friction.
+    float friction_coefficient = 0.4f;
+
     void prepare(const ContactPoint& contact, uint32_t id_a, uint32_t id_b, const std::vector<RigidBody>& bodies) {
         VelocityConstraint c;
         c.id_a = id_a;
@@ -29,7 +38,8 @@ public:
         c.normal = contact.normal;
         c.contact_point = contact.point_on_a;
         c.penetration = contact.penetration;
-        c.accumulated_impulse = 0.0f;
+        c.accumulated_normal_impulse = 0.0f;
+        c.accumulated_friction_impulse = Vec3(0.0f, 0.0f, 0.0f);
 
         const RigidBody& a = bodies[id_a];
         const RigidBody& b = bodies[id_b];
@@ -37,29 +47,31 @@ public:
         c.r_a = Vec3::sub(c.contact_point, a.position);
         c.r_b = Vec3::sub(c.contact_point, b.position);
 
+        // --- Normal effective mass (same as before) ---
         Vec3 cross_a = Vec3::cross(c.r_a, c.normal);
         Vec3 cross_b = Vec3::cross(c.r_b, c.normal);
-        
-        // Manual Mat3 * Vec3 multiply for term_a
+
         const Mat3& inv_I_a = a.world_inverse_inertia;
-        Vec3 rot_cross_a(
-            cross_a.x * inv_I_a.m[0] + cross_a.y * inv_I_a.m[3] + cross_a.z * inv_I_a.m[6],
-            cross_a.x * inv_I_a.m[1] + cross_a.y * inv_I_a.m[4] + cross_a.z * inv_I_a.m[7],
-            cross_a.x * inv_I_a.m[2] + cross_a.y * inv_I_a.m[5] + cross_a.z * inv_I_a.m[8]
-        );
+        Vec3 rot_cross_a = inv_I_a.transform_vec(cross_a);
         float term_a = Vec3::dot(rot_cross_a, cross_a);
 
-        // Manual Mat3 * Vec3 multiply for term_b
         const Mat3& inv_I_b = b.world_inverse_inertia;
-        Vec3 rot_cross_b(
-            cross_b.x * inv_I_b.m[0] + cross_b.y * inv_I_b.m[3] + cross_b.z * inv_I_b.m[6],
-            cross_b.x * inv_I_b.m[1] + cross_b.y * inv_I_b.m[4] + cross_b.z * inv_I_b.m[7],
-            cross_b.x * inv_I_b.m[2] + cross_b.y * inv_I_b.m[5] + cross_b.z * inv_I_b.m[8]
-        );
+        Vec3 rot_cross_b = inv_I_b.transform_vec(cross_b);
         float term_b = Vec3::dot(rot_cross_b, cross_b);
-        
+
         float inv_mass_sum = a.inverse_mass + b.inverse_mass + term_a + term_b;
         c.normal_mass = (inv_mass_sum > 0.0f) ? (1.0f / inv_mass_sum) : 0.0f;
+
+        // --- Tangential (friction) effective mass ---
+        // For the tangential direction, we use an average of the two tangent basis vectors.
+        // Since we don't know the sliding direction yet, we compute mass for an arbitrary
+        // tangent and store it. The actual friction solve picks the tangent from the
+        // relative velocity at solve time.
+        //
+        // Simplification: tangential mass ≈ normal mass for uniform bodies.
+        // For accuracy we'd recompute per-tangent-direction, but the sequential impulse
+        // solver converges with this approximation across iterations.
+        c.friction_mass = c.normal_mass;
 
         constraints.push_back(c);
     }
@@ -72,21 +84,69 @@ public:
             RigidBody& a = bodies[c.id_a];
             RigidBody& b = bodies[c.id_b];
 
+            // Relative velocity at contact point
             Vec3 vel_a = Vec3::add(a.linear_velocity, Vec3::cross(a.angular_velocity, c.r_a));
             Vec3 vel_b = Vec3::add(b.linear_velocity, Vec3::cross(b.angular_velocity, c.r_b));
             Vec3 rel_vel = Vec3::sub(vel_a, vel_b);
-            
+
+            // ---- NORMAL IMPULSE (same logic as before) ----
             float vel_along_normal = Vec3::dot(rel_vel, c.normal);
             float positional_error = std::max(c.penetration - SLOP, 0.0f) * BAUMGARTE_FACTOR / dt;
 
-            float delta_impulse = c.normal_mass * (-vel_along_normal + positional_error);
-            float new_impulse = std::max(c.accumulated_impulse + delta_impulse, 0.0f);
-            delta_impulse = new_impulse - c.accumulated_impulse;
-            c.accumulated_impulse = new_impulse;
+            float delta_normal = c.normal_mass * (-vel_along_normal + positional_error);
+            float new_normal_impulse = std::max(c.accumulated_normal_impulse + delta_normal, 0.0f);
+            delta_normal = new_normal_impulse - c.accumulated_normal_impulse;
+            c.accumulated_normal_impulse = new_normal_impulse;
 
-            Vec3 impulse = Vec3::scale(c.normal, delta_impulse);
-            a.apply_impulse(impulse, c.contact_point);
-            b.apply_impulse(Vec3::scale(impulse, -1.0f), c.contact_point);
+            Vec3 normal_impulse = Vec3::scale(c.normal, delta_normal);
+            a.apply_impulse(normal_impulse, c.contact_point);
+            b.apply_impulse(Vec3::scale(normal_impulse, -1.0f), c.contact_point);
+
+            // ---- FRICTION IMPULSE (Coulomb cone model) ----
+            //
+            // The friction impulse opposes the tangential component of the relative
+            // velocity. It is clamped to a cone defined by:
+            //   |friction_impulse| <= mu * normal_impulse
+            //
+            // This is the standard sequential impulse friction approach used in
+            // Box2D, Bullet, and most game physics engines.
+
+            // Recompute relative velocity after normal impulse was applied
+            vel_a = Vec3::add(a.linear_velocity, Vec3::cross(a.angular_velocity, c.r_a));
+            vel_b = Vec3::add(b.linear_velocity, Vec3::cross(b.angular_velocity, c.r_b));
+            rel_vel = Vec3::sub(vel_a, vel_b);
+
+            // Decompose relative velocity into normal and tangential components
+            float vel_n = Vec3::dot(rel_vel, c.normal);
+            Vec3 vel_tangent = Vec3::sub(rel_vel, Vec3::scale(c.normal, vel_n));
+
+            float tangent_len_sq = Vec3::length_sq(vel_tangent);
+
+            if (tangent_len_sq > APC_EPSILON_SQ) {
+                // Normalize the tangential velocity to get the friction direction
+                float tangent_len = std::sqrt(tangent_len_sq);
+                Vec3 tangent = Vec3::scale(vel_tangent, 1.0f / tangent_len);
+
+                // Compute the impulse needed to zero out tangential velocity
+                // delta_friction = -friction_mass * tangent_speed
+                float delta_friction_mag = c.friction_mass * tangent_len;
+
+                // Coulomb cone clamp: friction impulse <= mu * normal impulse
+                float max_friction = friction_coefficient * c.accumulated_normal_impulse;
+                float new_friction_mag = std::min(delta_friction_mag + Vec3::length(c.accumulated_friction_impulse), max_friction);
+                float applied_friction = new_friction_mag - Vec3::length(c.accumulated_friction_impulse);
+
+                // If the accumulated friction is already at the cone boundary, skip
+                if (applied_friction > 0.0f) {
+                    // Friction impulse opposes the sliding direction
+                    Vec3 friction_impulse = Vec3::scale(tangent, -applied_friction);
+
+                    c.accumulated_friction_impulse = Vec3::add(c.accumulated_friction_impulse, friction_impulse);
+
+                    a.apply_impulse(friction_impulse, c.contact_point);
+                    b.apply_impulse(Vec3::scale(friction_impulse, -1.0f), c.contact_point);
+                }
+            }
         }
     }
 
@@ -101,7 +161,7 @@ public:
             body.orientation = Quat::normalize(Quat::multiply(delta_q, body.orientation));
 
             body.update_world_inertia();
-            
+
             body.linear_velocity = Vec3::scale(body.linear_velocity, 0.999f);
             body.angular_velocity = Vec3::scale(body.angular_velocity, 0.998f);
         }

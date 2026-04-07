@@ -37,13 +37,25 @@ add_test(NAME Mat3Correctness COMMAND test_mat3)
 add_executable(test_skeleton_fk correctness/test_skeleton_fk.cpp)
 target_link_libraries(test_skeleton_fk PRIVATE apc_core)
 add_test(NAME SkeletonFKCorrectness COMMAND test_skeleton_fk)
+
+add_executable(test_obb correctness/test_obb.cpp)
+target_link_libraries(test_obb PRIVATE apc_core)
+add_test(NAME OBBCorrectness COMMAND test_obb)
+
+add_executable(test_gjk_epa correctness/test_gjk_epa.cpp)
+target_link_libraries(test_gjk_epa PRIVATE apc_core)
+add_test(NAME GJKEPACorrectness COMMAND test_gjk_epa)
+
+add_executable(test_broadphase correctness/test_broadphase.cpp)
+target_link_libraries(test_broadphase PRIVATE apc_core)
+add_test(NAME BroadphaseCorrectness COMMAND test_broadphase)
 # ---------------------------------------------------------
 # Integration Tests
 # ---------------------------------------------------------
-# COMMENTED OUT: Requires GJK/EPA/Broadphase which aren't in the core build target yet.
-# add_executable(test_pipeline_sphere_box integration/test_pipeline_sphere_box.cpp)
-# target_link_libraries(test_pipeline_sphere_box PRIVATE apc_core)
-# add_test(NAME PipelineSphereBox COMMAND test_pipeline_sphere_box)
+# Pipeline test: Broadphase + GJK narrowphase
+add_executable(test_pipeline_sphere_box integration/test_pipeline_sphere_box.cpp)
+target_link_libraries(test_pipeline_sphere_box PRIVATE apc_core)
+add_test(NAME PipelineSphereBox COMMAND test_pipeline_sphere_box)
 
 add_executable(test_3d_sphere_bounce integration/test_3d_sphere_bounce.cpp)
 target_link_libraries(test_3d_sphere_bounce PRIVATE apc_core)
@@ -56,3 +68,7 @@ add_test(NAME ABAIntegration COMMAND test_apc_pendulum)
 add_executable(test_blend_modes integration/test_blend_modes.cpp)
 target_link_libraries(test_blend_modes PRIVATE apc_core)
 add_test(NAME BlendModes COMMAND test_blend_modes)
+
+add_executable(test_friction integration/test_friction.cpp)
+target_link_libraries(test_friction PRIVATE apc_core)
+add_test(NAME FrictionIntegration COMMAND test_friction)

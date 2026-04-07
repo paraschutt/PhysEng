@@ -54,6 +54,12 @@ public:
             });
         
         active_proxies = proxies;
+
+        // Build O(log N) lookup: proxy ID → AABB
+        aabb_lookup = FlatMap<uint32_t, AABB>{};
+        for (const auto& p : proxies) {
+            aabb_lookup.insert(p.id, p.aabb);
+        }
     }
 
     const std::vector<BroadphasePair>& get_potential_pairs() const {
@@ -110,8 +116,8 @@ private:
     };
 
     const AABB& get_aabb(uint32_t id) const {
-        // In production this is an O(1) lookup array; simplified for review
-        for(const auto& p : active_proxies) { if(p.id == id) return p.aabb; }
+        const AABB* aabb = aabb_lookup.find(id);
+        if (aabb) return *aabb;
         static AABB empty = {{0,0,0}, {0,0,0}};
         return empty;
     }
@@ -119,6 +125,7 @@ private:
     std::vector<Endpoint> endpoints;
     std::vector<BroadphasePair> potential_pairs;
     std::vector<Proxy> active_proxies;
+    FlatMap<uint32_t, AABB> aabb_lookup; // proxy ID → AABB, O(log N) lookup
 };
 
 } // namespace apc

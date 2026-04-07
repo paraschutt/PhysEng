@@ -40,6 +40,7 @@ int main() {
     apc::SphereCollider col_b{1.0f};
 
     apc::Solver3D solver;
+    solver.friction_coefficient = 0.0f; // This test was designed for frictionless physics
     apc::ContactPoint temp_contact;
     float dt = 1.0f / 240.0f;
 

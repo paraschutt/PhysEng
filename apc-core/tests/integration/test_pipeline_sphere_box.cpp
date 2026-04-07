@@ -1,5 +1,6 @@
 #include "apc_collision/apc_broadphase.h"
 #include "apc_collision/apc_gjk.h"
+#include "apc_platform/apc_fp_mode.h"
 #include <cassert>
 #include <cstdio>
 
@@ -34,7 +35,7 @@ int main() {
     // Setup: Sphere at origin, radius 1. Box shifted slightly to the right, half-extents 0.5
     // They are overlapping by 0.5 units.
     Sphere sphere_data{1.0f};
-    Box box_data{0.5f, 0.5f, 0.5f};
+    Box box_data{apc::Vec3(0.5f, 0.5f, 0.5f)};
 
     ConvexHull hull_sphere{ &sphere_data, sphere_support };
     ConvexHull hull_box{ &box_data, box_support };

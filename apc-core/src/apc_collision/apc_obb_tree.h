@@ -18,23 +18,23 @@ public:
     void build(const ConvexAsset& asset) {
         nodes.clear();
         root_index = -1;
-        int hull_count = asset.get_hull_count();
-        if (hull_count == 0) return;
+        int piece_count = asset.get_piece_count();
+        if (piece_count == 0) return;
 
         // Phase 1: Create all leaf nodes
-        std::vector<int> leaf_indices(hull_count);
-        for (int i = 0; i < hull_count; ++i) {
+        std::vector<int> leaf_indices(piece_count);
+        for (int i = 0; i < piece_count; ++i) {
             OBBTreeNode leaf;
             leaf.hull_index = i;
             leaf.left_child = -1;
             leaf.right_child = -1;
 
-            // Calculate tight AABB from hull vertices, store as axis-aligned OBB
-            const auto& hull = asset.get_hull(i);
-            if (hull.vertices.empty()) continue;
+            // Calculate tight AABB from piece vertices, store as axis-aligned OBB
+            const auto& piece = asset.get_piece(i);
+            if (piece.vertices.empty()) continue;
 
-            Vec3 mn = hull.vertices[0], mx = mn;
-            for (const auto& v : hull.vertices) {
+            Vec3 mn = piece.vertices[0], mx = mn;
+            for (const auto& v : piece.vertices) {
                 mn.x = std::min(mn.x, v.x); mn.y = std::min(mn.y, v.y); mn.z = std::min(mn.z, v.z);
                 mx.x = std::max(mx.x, v.x); mx.y = std::max(mx.y, v.y); mx.z = std::max(mx.z, v.z);
             }
