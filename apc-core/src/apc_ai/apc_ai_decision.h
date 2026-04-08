@@ -258,6 +258,63 @@ struct UtilityAI {
             result *= stamina;
             break;
 
+        case AIActionType::BLOCK:
+            // High when close to ball trajectory and not in possession
+            // Good for defenders trying to block shots/passes
+            result *= (dist_ball < 8.0f) ? (1.0f - dist_ball / 8.0f) : 0.02f;
+            result *= (1.0f - possession); // Block when opponent has ball
+            result *= (0.6f + 0.4f * stamina);
+            // Higher closer to own goal (defensive positioning)
+            result *= (dist_goal > 20.0f) ? 0.7f : 1.0f;
+            break;
+
+        case AIActionType::MARK_OPPONENT:
+            // Stay close to nearest opponent, especially in defensive zone
+            {
+                float dist_opp = (input_count > 2) ? inputs[2] : 30.0f;
+                result *= (dist_opp < 5.0f) ? 0.8f : 0.15f;
+                result *= (1.0f - 0.5f * possession); // Mark more when defending
+                // More important near own goal
+                result *= (dist_goal > 25.0f) ? 0.6f : 1.0f;
+            }
+            break;
+
+        case AIActionType::CROSS:
+            // Cross when wide and has ball (possession), moderate distance to goal
+            {
+                float dist_opp = (input_count > 2) ? inputs[2] : 30.0f;
+                result *= (dist_ball < 3.0f) ? 0.7f : 0.0f; // Need ball nearby
+                result *= possession; // Only when team has possession
+                result *= (dist_goal > 15.0f && dist_goal < 40.0f) ? 0.8f : 0.1f;
+                // Better when wide (opponent far laterally)
+                result *= (dist_opp > 5.0f) ? 0.7f : 0.3f;
+                result *= stamina;
+            }
+            break;
+
+        case AIActionType::HEADER:
+            // Header when ball is in air nearby and close to goal
+            // Simplified: use distance to ball and goal as proxy
+            result *= (dist_ball < 4.0f) ? (1.0f - dist_ball / 4.0f) : 0.0f;
+            result *= (dist_goal < 20.0f) ? (1.0f - dist_goal / 20.0f) : 0.05f;
+            result *= (0.7f + 0.3f * stamina);
+            break;
+
+        case AIActionType::DIVE_SAVE:
+            // Goalkeeper action: very high when close to own goal and ball nearby
+            result *= (dist_ball < 10.0f) ? (1.0f - dist_ball / 10.0f) : 0.0f;
+            result *= (dist_goal > 35.0f) ? 1.0f : 0.1f; // Close to own goal
+            // Primarily for goalkeepers — this will be boosted by role_weights
+            result *= (0.8f + 0.2f * stamina);
+            break;
+
+        case AIActionType::PUNT:
+            // Goalkeeper action: punt when has ball and far from opponents
+            result *= (dist_ball < 3.0f) ? 0.8f : 0.0f;
+            result *= (dist_goal > 40.0f) ? 1.0f : 0.3f; // Near own goal
+            result *= stamina;
+            break;
+
         case AIActionType::FORMATION_HOLD:
         default:
             // Fallback: always reasonable

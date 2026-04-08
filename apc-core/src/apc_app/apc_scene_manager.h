@@ -267,6 +267,12 @@ struct SceneState {
         utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::INTERCEPT;
         utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::TACKLE;
         utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::PASS_BALL;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::BLOCK;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::MARK_OPPONENT;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::CROSS;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::HEADER;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::DIVE_SAVE;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::PUNT;
 
         utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::FORMATION_HOLD;
         utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::CHASE_BALL;
@@ -277,6 +283,12 @@ struct SceneState {
         utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::INTERCEPT;
         utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::TACKLE;
         utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::PASS_BALL;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::BLOCK;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::MARK_OPPONENT;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::CROSS;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::HEADER;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::DIVE_SAVE;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::PUNT;
 
         // Add default considerations
         utility_ai[0].add_consideration("dist_ball", 1.5f, ResponseCurve::QUADRATIC, 0.0f, 50.0f);

@@ -137,7 +137,7 @@ struct BallConfig {
         body.inverse_mass = (mass > 0.0f) ? (1.0f / mass) : 0.0f;
 
         float inv_I = (moment_of_inertia > 0.0f) ? (1.0f / moment_of_inertia) : 0.0f;
-        float r = get_effective_radius();
+        (void)get_effective_radius();
         body.local_inverse_inertia = Mat3{
             {inv_I, 0.0f, 0.0f,
              0.0f, inv_I, 0.0f,

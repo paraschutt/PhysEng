@@ -136,7 +136,7 @@ static int test_utility_debug_entry_defaults() {
     assert(approx_eq(entry.position.y, 0.0f) && "position y = 0");
     assert(approx_eq(entry.position.z, 0.0f) && "position z = 0");
     assert(approx_eq(entry.confidence, 0.0f) && "confidence = 0");
-    assert(entry.chosen_action == apc::ActionType::IDLE && "chosen_action = IDLE");
+    assert(entry.chosen_action == apc::AIActionType::IDLE && "chosen_action = IDLE");
 
     // action_scores and action_types should be zero-initialized
     for (uint32_t i = 0u; i < 8u; ++i) {

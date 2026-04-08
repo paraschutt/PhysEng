@@ -8,7 +8,9 @@ function(apc_set_deterministic_flags target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /WX /Z7)
     else()
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Werror -g)
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Werror -g
+            -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable
+        )
     endif()
 
     # Strict Determinism Flags

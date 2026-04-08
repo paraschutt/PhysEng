@@ -19,8 +19,7 @@ void test_vec3_basic_algebra() {
     assert(c.x == 2.0f && c.y == 4.0f && c.z == 6.0f);
 
     // Dot
-    float dot = apc::Vec3::dot(a, b);
-    assert(dot == 32.0f); // 1*4 + 2*5 + 3*6
+    assert(apc::Vec3::dot(a, b) == 32.0f); // 1*4 + 2*5 + 3*6
 
     // Cross
     apc::Vec3 cross = apc::Vec3::cross(apc::Vec3(1,0,0), apc::Vec3(0,1,0));

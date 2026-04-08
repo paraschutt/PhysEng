@@ -419,6 +419,83 @@ struct Application {
                     }
                     break;
 
+                case AIActionType::BLOCK:
+                    // Steer between ball and own goal to block shots
+                    steer_target = Vec3(
+                        (ball_pos.x + own_goal_x) * 0.5f,
+                        0.0f,
+                        ball_pos.z
+                    );
+                    urgency = 0.85f;
+                    break;
+
+                case AIActionType::MARK_OPPONENT:
+                    // Find nearest opponent and shadow them
+                    {
+                        float nearest_dist = 999.0f;
+                        Vec3 nearest_pos = a.position;
+                        for (uint32_t j = 0u; j < scene.entity_manager.athlete_count; ++j) {
+                            const AthleteEntity& opp = scene.entity_manager.athletes[j];
+                            if (!opp.id.is_valid() || opp.team == a.team) continue;
+                            float d = Vec3::length(Vec3::sub(opp.position, a.position));
+                            if (d < nearest_dist) {
+                                nearest_dist = d;
+                                nearest_pos = opp.position;
+                            }
+                        }
+                        // Position between opponent and own goal (goal-side marking)
+                        steer_target = Vec3(
+                            (nearest_pos.x + own_goal_x) * 0.45f,
+                            0.0f,
+                            nearest_pos.z
+                        );
+                        urgency = 0.6f;
+                    }
+                    break;
+
+                case AIActionType::CROSS:
+                    // Cross: steer to ball if far, or toward touchline if close
+                    if (dist_to_ball < 2.0f && ball) {
+                        // Cross toward opponent goal area
+                        steer_target = Vec3(
+                            opp_goal_x * 0.6f,
+                            0.0f,
+                            0.0f
+                        );
+                        urgency = 0.9f;
+                    } else {
+                        steer_target = ball_pos;
+                        urgency = 0.7f;
+                    }
+                    break;
+
+                case AIActionType::HEADER:
+                    // Header: jump toward ball (simplified as steering to ball)
+                    steer_target = ball_pos;
+                    urgency = 0.85f;
+                    break;
+
+                case AIActionType::DIVE_SAVE:
+                    // Goalkeeper dive: steer toward ball urgently
+                    if (ball) {
+                        // Predict ball landing near goal line
+                        Vec3 dive_target = Vec3::add(ball_pos,
+                            Vec3::scale(ball->velocity, 0.15f));
+                        dive_target.x = own_goal_x + (a.team == TEAM_HOME ? 2.0f : -2.0f);
+                        dive_target.y = 0.0f;
+                        steer_target = dive_target;
+                    } else {
+                        steer_target = Vec3(own_goal_x, 0.0f, 0.0f);
+                    }
+                    urgency = 1.0f;
+                    break;
+
+                case AIActionType::PUNT:
+                    // Goalkeeper punt: steer to ball then kick long
+                    steer_target = ball_pos;
+                    urgency = 0.8f;
+                    break;
+
                 default:
                     steer_target = formation_pos;
                     urgency = 0.2f;
