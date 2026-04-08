@@ -214,6 +214,9 @@ void SDL2Application::run() {
 // ---------------------------------------------------------------------------
 
 void SDL2Application::process_events() {
+    // Refresh keyboard state (scancode array, valid for entire frame)
+    keys_ = SDL_GetKeyboardState(nullptr);
+
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
@@ -229,9 +232,6 @@ void SDL2Application::process_events() {
             break;
 
         case SDL_KEYDOWN:
-            if (event.key.keysym.sym < 256) {
-                keys_down_[event.key.keysym.sym] = true;
-            }
             if (event.key.keysym.sym == SDLK_ESCAPE) {
                 shutdown();
                 return;
@@ -241,12 +241,6 @@ void SDL2Application::process_events() {
             }
             if (event.key.keysym.sym == SDLK_SPACE) {
                 paused_ = !paused_;
-            }
-            break;
-
-        case SDL_KEYUP:
-            if (event.key.keysym.sym < 256) {
-                keys_down_[event.key.keysym.sym] = false;
             }
             break;
 
@@ -265,12 +259,13 @@ void SDL2Application::process_events() {
 // ---------------------------------------------------------------------------
 
 void SDL2Application::handle_input(float dt) {
+    if (!keys_) return;
     float pan_speed = 5.0f / camera_.zoom * 100.0f;
 
-    if (keys_down_[SDLK_LEFT]  || keys_down_[SDLK_a]) camera_.center_x -= pan_speed * dt;
-    if (keys_down_[SDLK_RIGHT] || keys_down_[SDLK_d]) camera_.center_x += pan_speed * dt;
-    if (keys_down_[SDLK_UP]    || keys_down_[SDLK_w]) camera_.center_y += pan_speed * dt;
-    if (keys_down_[SDLK_DOWN]  || keys_down_[SDLK_s]) camera_.center_y -= pan_speed * dt;
+    if (keys_[SDL_SCANCODE_LEFT]  || keys_[SDL_SCANCODE_A]) camera_.center_x -= pan_speed * dt;
+    if (keys_[SDL_SCANCODE_RIGHT] || keys_[SDL_SCANCODE_D]) camera_.center_x += pan_speed * dt;
+    if (keys_[SDL_SCANCODE_UP]    || keys_[SDL_SCANCODE_W]) camera_.center_y += pan_speed * dt;
+    if (keys_[SDL_SCANCODE_DOWN]  || keys_[SDL_SCANCODE_S]) camera_.center_y -= pan_speed * dt;
 }
 
 // ---------------------------------------------------------------------------

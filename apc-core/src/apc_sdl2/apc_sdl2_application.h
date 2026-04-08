@@ -105,7 +105,9 @@ private:
     Camera camera_;
 
     // --- Input state ---
-    bool keys_down_[256] = {};
+    // SDL_GetKeyboardState() returns scancode-based array (always valid).
+    // Scancodes are small integers (0-511), safe to index.
+    const uint8_t* keys_ = nullptr;
 
     // --- Methods ---
     void process_events();
