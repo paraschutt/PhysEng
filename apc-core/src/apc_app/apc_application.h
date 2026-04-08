@@ -665,10 +665,11 @@ struct Application {
         ApplicationConfig cfg;
         // Set window title
         const char* title = "APC Physics Engine — Soccer";
+        cfg.window_title[0] = '\0';
         for (uint32_t i = 0u; title[i] && i < MAX_NAME_LENGTH - 1u; ++i) {
             cfg.window_title[i] = title[i];
+            cfg.window_title[i + 1] = '\0';
         }
-        cfg.window_title[27] = '\0';
 
         cfg.window_width          = 1920u;
         cfg.window_height         = 1080u;
@@ -688,10 +689,11 @@ struct Application {
     {
         ApplicationConfig cfg;
         const char* title = "APC Physics Engine — Basketball";
+        cfg.window_title[0] = '\0';
         for (uint32_t i = 0u; title[i] && i < MAX_NAME_LENGTH - 1u; ++i) {
             cfg.window_title[i] = title[i];
+            cfg.window_title[i + 1] = '\0';
         }
-        cfg.window_title[29] = '\0';
 
         cfg.window_width          = 1920u;
         cfg.window_height         = 1080u;

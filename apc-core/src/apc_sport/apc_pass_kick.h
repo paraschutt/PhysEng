@@ -650,6 +650,10 @@ struct TrajectoryPrediction {
 
     // --- Get time to reach a Y height ---
     float time_to_height(float target_y) const {
+        // Check if last point exactly matches (e.g. ground hit at y=0)
+        if (point_count > 0u && std::abs(points[point_count - 1].y - target_y) < APC_EPSILON) {
+            return times[point_count - 1];
+        }
         for (uint32_t i = 0; i < point_count - 1; ++i) {
             if ((points[i].y >= target_y && points[i + 1].y < target_y) ||
                 (points[i].y <= target_y && points[i + 1].y > target_y))

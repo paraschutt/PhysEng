@@ -363,7 +363,12 @@ static int test_set_time_scale() {
     loop.time.current_time = 0.0;
     loop.time.accumulator = 0.0f;
     loop.time.time_scale = 0.5f;
-    loop.begin_frame(0.02); // 20ms wall clock
+    // First call seeds current_time (no delta computed since current_time == 0)
+    loop.begin_frame(0.01);
+    // Reset accumulator and call again — now delta IS computed
+    loop.time.accumulator = 0.0f;
+    loop.time.time_scale = 0.5f;
+    loop.begin_frame(0.03); // delta = 0.02
     float expected_acc = 0.01f; // 20ms * 0.5 = 10ms
     assert(approx_eq(loop.time.accumulator, expected_acc, 0.001f) && "accumulator scaled by 0.5");
 

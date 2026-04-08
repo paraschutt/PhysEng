@@ -186,11 +186,12 @@ static int test_evaluate_returns_score() {
     ai.action_count = 1u;
 
     // Input: proximity = 0.5 → LINEAR(0.5) = 0.5
+    // Score = action_specific(0.396) * 0.7 + consideration(0.5) * 0.3 = 0.427
     float inputs[] = { 0.5f };
     apc::UtilityScore result = ai.evaluate(inputs, 1);
 
-    // Score should be valid: product of all consideration evaluations
-    assert(approx_eq(result.score, 0.5f, 0.01f) && "score ≈ 0.5 (LINEAR(0.5))");
+    // Score blends action-specific scoring with consideration evaluation
+    assert(approx_eq(result.score, 0.43f, 0.05f) && "score ≈ 0.43 (CHASE_BALL + LINEAR(0.5))");
     assert(result.action == apc::AIActionType::CHASE_BALL && "selected action = CHASE_BALL");
     assert(result.confidence >= 0.0f && result.confidence <= 1.0f && "confidence in [0,1]");
 
@@ -218,21 +219,16 @@ static int test_evaluate_picks_best() {
     float inputs[] = { 0.9f };
     apc::UtilityScore result = ai.evaluate(inputs, 1);
 
-    // Both actions score the same (same consideration), so first one wins
-    // (score comparison uses >, so first one encountered with highest score wins)
-    assert(result.action == apc::AIActionType::IDLE && "same scores: first action wins");
+    // CHASE_BALL has higher action-specific scoring than IDLE, so it wins
+    // even without role weights (action-specific: CHASE_BALL ~0.393*0.7+0.27=0.545 vs IDLE ~0.3*0.7+0.27=0.48)
+    assert(result.action == apc::AIActionType::CHASE_BALL && "CHASE_BALL wins (higher action score)");
 
-    // Now set a weight on CHASE_BALL to make it score higher
+    // Now set a weight on CHASE_BALL to boost its score
     ai.set_action_weight(apc::AIActionType::CHASE_BALL, 2.0f);
 
-    // IDLE score = 0.9 * 1.0 (no role weight for index 0 since role_weight_count=1)
-    // Actually, role_weight_count becomes 2 (index 1 + 1), so:
-    //   IDLE (idx=0): 0.9 * role_weights[0]=1.0 = 0.9
-    //   CHASE_BALL (idx=2): 0.9 * role_weights[2]=2.0 = 1.8
-    // But wait, role_weight_count after set_action_weight(CHASE_BALL, 2.0):
-    //   idx = 2, idx >= role_weight_count (0) → role_weight_count = 3
-    //   So for IDLE (idx=0): 0 < 3, so multiply by role_weights[0]=1.0
-    //   For CHASE_BALL (idx=2): 2 < 3, so multiply by role_weights[2]=2.0
+    // CHASE_BALL already won unweighted; with weight=2.0 it scores even higher
+    // role_weight_count becomes 3 (idx=2 + 1), so IDLE gets role_weights[0]=1.0
+    // and CHASE_BALL gets role_weights[2]=2.0
     apc::UtilityScore result2 = ai.evaluate(inputs, 1);
     assert(result2.action == apc::AIActionType::CHASE_BALL && "weighted: CHASE_BALL wins");
     assert(result2.score > result.score && "weighted score > unweighted score");

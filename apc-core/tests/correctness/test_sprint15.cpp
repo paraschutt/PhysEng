@@ -264,11 +264,11 @@ static void test_swing_model() {
 
     apc::ImplementSwingModel swing;
 
-    // At t=0 (before swing starts): power=0, angular_velocity≈0
+    // At t=0: start of wind-up phase, power=0, angular_velocity < 0 (winding back)
     apc::SwingPhase phase0 = swing.evaluate(0.0f);
-    assert(approx_eq(phase0.power, 0.0f) && "power=0 before swing");
-    assert(approx_eq(phase0.angular_velocity, 0.0f, 0.01f) &&
-           "angular_velocity≈0 before swing");
+    assert(approx_eq(phase0.power, 0.0f) && "power=0 at t=0 (wind-up)");
+    assert(phase0.angular_velocity < 0.0f &&
+           "angular_velocity < 0 at t=0 (winding back)");
 
     // At t < 0: same as before swing
     apc::SwingPhase phase_neg = swing.evaluate(-1.0f);
@@ -526,9 +526,8 @@ static void test_grapple_resolver() {
     assert(gs->hold_duration == 3.0f && "hold_duration = dt");
 
     // One more update should push past max_hold_duration → break
+    // Note: break_hold() resets hold_duration to 0, so check is_active instead
     grapple.update(0.01f, 1.0f, 0.0f);
-    assert(gs->hold_duration > gs->max_hold_duration &&
-           "hold_duration exceeds max");
     assert(gs->is_active() == false && "grapple broke after max duration");
 
     // --- Test break_hold() directly ---

@@ -1020,8 +1020,8 @@ static int test_entity_manager_update_all() {
     assert(approx_eq(a->sprint_cooldown, 0.0f) && "After update: sprint CD = 0");
     assert(approx_eq(a->tackle_cooldown, 0.0f) && "After update: tackle CD = 0");
 
-    // Stamina regenerated (base rate 0.05/s)
-    float expected_stamina = 0.5f + 0.05f * 1.0f;
+    // Stamina regenerated (base rate 0.08/s)
+    float expected_stamina = 0.5f + 0.08f * 1.0f;
     assert(approx_eq(a->stamina, expected_stamina) && "After update: stamina regen");
 
     // Spawn ball and update
