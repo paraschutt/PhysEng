@@ -144,11 +144,12 @@ endif()
 if(SDL2_FOUND)
     message(STATUS "SDL2 found — building apc_sdl2_application target")
 
-    # Prefer the new src/apc_sdl2 source; fall back to src/apc_app/sdl2_main.cpp
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/apc_sdl2/apc_sdl2_application.cpp")
-        set(_SDL2_SRC src/apc_sdl2/apc_sdl2_application.cpp)
-    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/apc_app/sdl2_main.cpp")
+    # Prefer src/apc_app/sdl2_main.cpp (full soccer sim); fall back to
+    # src/apc_sdl2/apc_sdl2_application.cpp (simple bouncing balls demo)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/apc_app/sdl2_main.cpp")
         set(_SDL2_SRC src/apc_app/sdl2_main.cpp)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/apc_sdl2/apc_sdl2_application.cpp")
+        set(_SDL2_SRC src/apc_sdl2/apc_sdl2_application.cpp)
     else()
         message(WARNING "SDL2 source file not found — skipping apc_sdl2_application")
         set(SDL2_FOUND 0)
