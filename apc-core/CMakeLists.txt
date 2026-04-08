@@ -165,19 +165,17 @@ if(SDL2_FOUND)
     # C++17 required
     target_compile_features(apc_sdl2_application PRIVATE cxx_std_17)
 
+    # We handle WinMain/main ourselves — don't let SDL2main redefine main().
+    # This avoids SDL_main linker errors on Windows.
+    target_compile_definitions(apc_sdl2_application PRIVATE SDL_MAIN_HANDLED)
+
     # SDL2 linking — handle different find_package results
     if(TARGET SDL2::SDL2)
         # Modern CMake target (vcpkg dynamic, newer system installs)
         target_link_libraries(apc_sdl2_application PRIVATE SDL2::SDL2)
-        if(TARGET SDL2::SDL2main)
-            target_link_libraries(apc_sdl2_application PRIVATE SDL2::SDL2main)
-        endif()
     elseif(TARGET SDL2::SDL2-static)
         # vcpkg static build
         target_link_libraries(apc_sdl2_application PRIVATE SDL2::SDL2-static)
-        if(TARGET SDL2::SDL2main)
-            target_link_libraries(apc_sdl2_application PRIVATE SDL2::SDL2main)
-        endif()
     elseif(SDL2_PC_FOUND)
         # pkg-config path (Linux)
         target_include_directories(apc_sdl2_application PRIVATE ${SDL2_PC_INCLUDE_DIRS})
