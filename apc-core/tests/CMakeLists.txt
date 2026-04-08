@@ -10,6 +10,7 @@ add_executable(det_main
     determinism/det_vec3_ops.cpp
     determinism/det_quat_ops.cpp
     determinism/det_mat3_ops.cpp
+    determinism/det_game_loop.cpp
 )
 target_link_libraries(det_main PRIVATE apc_core)
 add_test(NAME MathOpsDeterminism COMMAND det_main)

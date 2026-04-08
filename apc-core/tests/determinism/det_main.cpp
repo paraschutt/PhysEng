@@ -6,6 +6,7 @@
 extern uint64_t run_det_vec3_ops();
 extern uint64_t run_det_quat_ops();
 extern uint64_t run_det_mat3_ops();
+extern uint64_t run_det_game_loop();
 
 // Combine hashes (similar to boost::hash_combine)
 inline uint64_t hash_combine(uint64_t seed, uint64_t value) {
@@ -32,6 +33,9 @@ int main() {
 
     std::fprintf(stdout, "Running Mat3 determinism tests...\n");
     final_hash = hash_combine(final_hash, run_det_mat3_ops());
+
+    std::fprintf(stdout, "Running Game Loop determinism tests...\n");
+    final_hash = hash_combine(final_hash, run_det_game_loop());
 
     // 3. Output standardized format for hash_compare.py
     std::fprintf(stdout, "\n=== DETERMINISM RESULT ===\n");
