@@ -124,8 +124,8 @@ struct FormationSystem {
     // =========================================================================
     Vec3 get_formation_position(uint8_t player_index,
                                  const Vec3& ball_position,
-                                 const Vec3& team_goal,
-                                 const Vec3& opponent_goal,
+                                 const Vec3& /*team_goal*/,
+                                 const Vec3& /*opponent_goal*/,
                                  float possession_factor) const
     {
         if (player_index >= MAX_FORMATION_POSITIONS) {

@@ -37,3 +37,6 @@ Makefile
 Testing/
 CTestTestfile.cmake
 DartConfiguration.tcl
+node_modules/
+bun.lock
+package.json

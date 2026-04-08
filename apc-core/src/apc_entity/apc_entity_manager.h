@@ -196,6 +196,17 @@ struct EntityManager {
         return nullptr;
     }
 
+    const BallEntity* find_ball() const
+    {
+        for (uint32_t i = 0u; i < ball_count; ++i) {
+            const BallEntity& b = balls[i];
+            if (b.id.is_valid() && b.is_in_play) {
+                return &b;
+            }
+        }
+        return nullptr;
+    }
+
     // =========================================================================
     // Queries
     // =========================================================================

@@ -40,6 +40,15 @@ target_include_directories(apc_core
 )
 
 # ---------------------------------------------------------
+# Application Executable
+# ---------------------------------------------------------
+add_executable(apc_application
+    src/apc_app/main.cpp
+)
+target_link_libraries(apc_application PRIVATE apc_core)
+apc_set_deterministic_flags(apc_application)
+
+# ---------------------------------------------------------
 # Tests
 # ---------------------------------------------------------
 add_subdirectory(tests)

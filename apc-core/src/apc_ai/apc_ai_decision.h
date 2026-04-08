@@ -185,13 +185,14 @@ struct UtilityAI {
     // =========================================================================
     // get_action_score — Compute utility score for a specific action
     // =========================================================================
-    float get_action_score(AIActionType action, const float* inputs,
+    float get_action_score(AIActionType /*action*/, const float* inputs,
                             uint32_t input_count) const
     {
         if (consideration_count == 0u || inputs == nullptr) {
             return 0.0f;
         }
 
+        (void)input_count; // Used via eval_count below
         float result = 1.0f;
         uint32_t eval_count = (input_count < consideration_count)
                               ? input_count : consideration_count;
