@@ -69,16 +69,17 @@ message(STATUS "=== SDL2 Visualizer Setup ===")
 # Try find_package first (works with vcpkg, system installs, MSYS2)
 # SDL2 provides both a Config and Module find; we prefer Config for vcpkg compat.
 find_package(SDL2 QUIET CONFIG)
-if(NOT SDL2_FOUND)
+if(NOT SDL2_FOUND AND NOT TARGET SDL2::SDL2 AND NOT TARGET SDL2::SDL2-static)
     find_package(SDL2 QUIET MODULE)
+    if(NOT SDL2_FOUND)
+        set(SDL2_FOUND FALSE)
+    endif()
 endif()
 
 # Manual SDL2_DIR hint support (user sets -DSDL2_DIR=...)
-if(NOT SDL2_FOUND AND DEFINED SDL2_DIR)
+# Only CONFIG mode supports PATHS/NO_DEFAULT_PATH; MODULE mode does not.
+if(NOT SDL2_FOUND AND NOT TARGET SDL2::SDL2 AND NOT TARGET SDL2::SDL2-static AND DEFINED SDL2_DIR)
     find_package(SDL2 QUIET CONFIG PATHS ${SDL2_DIR} NO_DEFAULT_PATH)
-    if(NOT SDL2_FOUND)
-        find_package(SDL2 QUIET MODULE PATHS ${SDL2_DIR} NO_DEFAULT_PATH)
-    endif()
 endif()
 
 # Linux fallback: try pkg-config
@@ -129,6 +130,17 @@ if(NOT SDL2_FOUND AND NOT WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_pa
     endif()
 endif()
 
+# Final check: consider SDL2 found if either the variable or a CMake target exists
+if(NOT SDL2_FOUND AND TARGET SDL2::SDL2)
+    set(SDL2_FOUND TRUE)
+    message(STATUS "SDL2 found via CMake target SDL2::SDL2")
+endif()
+if(NOT SDL2_FOUND AND TARGET SDL2::SDL2-static)
+    set(SDL2_FOUND TRUE)
+    set(SDL2_USE_STATIC ON)
+    message(STATUS "SDL2 found via CMake target SDL2::SDL2-static")
+endif()
+
 if(SDL2_FOUND)
     message(STATUS "SDL2 found — building apc_sdl2_application target")
 
@@ -154,8 +166,14 @@ if(SDL2_FOUND)
 
     # SDL2 linking — handle different find_package results
     if(TARGET SDL2::SDL2)
-        # Modern CMake target (vcpkg, newer system installs)
+        # Modern CMake target (vcpkg dynamic, newer system installs)
         target_link_libraries(apc_sdl2_application PRIVATE SDL2::SDL2)
+        if(TARGET SDL2::SDL2main)
+            target_link_libraries(apc_sdl2_application PRIVATE SDL2::SDL2main)
+        endif()
+    elseif(TARGET SDL2::SDL2-static)
+        # vcpkg static build
+        target_link_libraries(apc_sdl2_application PRIVATE SDL2::SDL2-static)
         if(TARGET SDL2::SDL2main)
             target_link_libraries(apc_sdl2_application PRIVATE SDL2::SDL2main)
         endif()
