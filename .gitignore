@@ -40,3 +40,6 @@ DartConfiguration.tcl
 node_modules/
 bun.lock
 package.json
+
+# Vendored third-party (SDL2 dev headers for offline builds)
+apc-core/third_party/
