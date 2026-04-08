@@ -321,14 +321,30 @@ struct Application {
                     }
                 }
             }
-            // Max 2 chasers per team (nearest + 2nd nearest)
-            static constexpr uint32_t MAX_CHASERS = 2u;
+            // Dynamic chase budget based on ball possession state
+            uint32_t max_chasers_home = 2u;
+            uint32_t max_chasers_away = 2u;
+            if (ball) {
+                if (ball->possession_team == TEAM_NONE) {
+                    // Free ball: both teams chase aggressively
+                    max_chasers_home = 3u;
+                    max_chasers_away = 3u;
+                } else if (ball->possession_team == TEAM_HOME) {
+                    // Home has ball: only 1 home chaser needed, away presses harder
+                    max_chasers_home = 1u;
+                    max_chasers_away = 3u;
+                } else {
+                    // Away has ball: away only needs 1 chaser, home presses harder
+                    max_chasers_home = 3u;
+                    max_chasers_away = 1u;
+                }
+            }
             uint8_t home_can_chase[MAX_ATHLETES] = {};
             uint8_t away_can_chase[MAX_ATHLETES] = {};
-            for (uint32_t ii = 0u; ii < home_rank_count && ii < MAX_CHASERS; ++ii) {
+            for (uint32_t ii = 0u; ii < home_rank_count && ii < max_chasers_home; ++ii) {
                 home_can_chase[home_ranks[ii].idx] = 1u;
             }
-            for (uint32_t ii = 0u; ii < away_rank_count && ii < MAX_CHASERS; ++ii) {
+            for (uint32_t ii = 0u; ii < away_rank_count && ii < max_chasers_away; ++ii) {
                 away_can_chase[away_ranks[ii].idx] = 1u;
             }
 
@@ -370,7 +386,13 @@ struct Application {
                 // Pre-compute formation position for position_quality below
                 uint32_t form_idx_pq = (a.team == TEAM_HOME)
                     ? home_player_idx : away_player_idx;
-                float possession_factor_pq = 0.3f + 0.7f * has_possession;
+                // Team-level possession factor for formation positioning
+                float team_possession_pq = 0.0f;
+                if (scene.last_possession_team == a.team && scene.possession_timer > 0.0f) {
+                    team_possession_pq = 1.0f; // We have ball — attack
+                }
+                // possession_factor: 0.2 (deep defend) to 1.0 (full attack)
+                float possession_factor_pq = 0.2f + 0.8f * team_possession_pq;
                 Vec3 form_pos_pq = scene.formation_system.get_formation_position(
                     static_cast<uint8_t>(form_idx_pq),
                     ball_pos,
@@ -429,8 +451,13 @@ struct Application {
                 uint32_t form_idx = (a.team == TEAM_HOME)
                     ? home_player_idx : away_player_idx;
 
-                // Possession factor: 0.5 when ball is central, 1.0 when own team has it
-                float possession_factor = 0.3f + 0.7f * has_possession;
+                // Team-level possession factor for formation positioning
+                float team_possession = 0.0f;
+                if (scene.last_possession_team == a.team && scene.possession_timer > 0.0f) {
+                    team_possession = 1.0f; // We have ball — attack
+                }
+                // possession_factor: 0.2 (deep defend) to 1.0 (full attack)
+                float possession_factor = 0.2f + 0.8f * team_possession;
 
                 Vec3 formation_pos = scene.formation_system.get_formation_position(
                     static_cast<uint8_t>(form_idx),
@@ -658,22 +685,21 @@ struct Application {
                     a.position, steer_target, max_speed, 0.5f, 4.0f);
                 primary.urgency = urgency;
 
-                // Secondary: separation from nearby teammates
-                Vec3 neighbors[MAX_NEIGHBOR_COUNT];
-                uint32_t neighbor_count = 0u;
-                for (uint32_t j = 0u; j < scene.entity_manager.athlete_count && neighbor_count < MAX_NEIGHBOR_COUNT; ++j) {
+                // Secondary: separation from ALL nearby athletes (teammates + opponents)
+                Vec3 all_neighbors[MAX_NEIGHBOR_COUNT * 2];
+                uint32_t all_neighbor_count = 0u;
+                for (uint32_t j = 0u; j < scene.entity_manager.athlete_count && all_neighbor_count < MAX_NEIGHBOR_COUNT * 2; ++j) {
                     if (j == i) continue;
                     const AthleteEntity& other = scene.entity_manager.athletes[j];
                     if (!other.id.is_valid()) continue;
-                    if (other.team != a.team) continue;
                     float ndist = Vec3::length(Vec3::sub(a.position, other.position));
-                    if (ndist < 3.0f) { // Only care about close teammates
-                        neighbors[neighbor_count++] = other.position;
+                    if (ndist < 2.5f) { // Tighter radius for opponent avoidance
+                        all_neighbors[all_neighbor_count++] = other.position;
                     }
                 }
                 SteeringOutput sep = SteeringSystem::separation(
-                    neighbors, neighbor_count, a.position,
-                    2.0f, 15.0f);
+                    all_neighbors, all_neighbor_count, a.position,
+                    1.5f, 20.0f); // Stronger force (20.0) at closer radius (1.5m)
 
                 // Blend primary + separation
                 WeightedSteering blended[2];
@@ -681,7 +707,7 @@ struct Application {
                 blended[0].weight = 1.0f;
                 blended[0].output = primary;
                 blended[1].behavior = SteeringBehavior::SEPARATION;
-                blended[1].weight = 2.5f;
+                blended[1].weight = 3.0f;
                 blended[1].output = sep;
 
                 SteeringOutput final_steering = SteeringSystem::blend(blended, 2u);

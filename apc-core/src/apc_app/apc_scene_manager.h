@@ -390,97 +390,186 @@ struct SceneState {
             return; // Skip athlete interactions while out of play
         }
 
+        // --- Ball interaction exclusivity ---
+        // Per physics step, only ONE player per team can apply force to the ball
+        // (the closest on their team). Opponents can only TACKLE/INTERCEPT to
+        // contest possession.
+
+        // First pass: find closest athlete on each team within kick range
+        int32_t closest_home_idx = -1;
+        int32_t closest_away_idx = -1;
+        float closest_home_dist = 999.0f;
+        float closest_away_dist = 999.0f;
+        float closest_home_dist_xz = 999.0f;
+        float closest_away_dist_xz = 999.0f;
+
         for (uint32_t i = 0u; i < entity_manager.athlete_count; ++i) {
-            AthleteEntity& a = entity_manager.athletes[i];
+            const AthleteEntity& a = entity_manager.athletes[i];
             if (!a.id.is_valid() || !a.is_active) continue;
 
-            // Distance from athlete to ball (XZ plane + Y)
             Vec3 diff = Vec3::sub(ball->position, a.position);
             float dist_xz = std::sqrt(diff.x * diff.x + diff.z * diff.z);
             float dist_y = std::abs(diff.y);
-
-            // Interaction range: athlete radius + ball radius + kick reach
             float kick_range = a.radius + ball->radius + 0.8f;
-            float ground_reach = a.height * 0.6f; // Can reach up to ~60% of height
+            float ground_reach = a.height * 0.6f;
 
             if (dist_xz < kick_range && dist_y < ground_reach) {
-                // --- Athlete is close enough to interact with ball ---
-
-                // Update possession tracking
-                last_ball_toucher = a.id;
-                last_possession_team = a.team;
-                possession_timer = POSSESSION_WINDOW;
-                ball->possession_team = a.team;
-
-                // Get AI action from stored flags
-                AIActionType action = static_cast<AIActionType>(a.flags & 0xFFu);
-
-                // Direction from athlete to ball
-                Vec3 to_ball = diff;
-                to_ball.y = 0.0f;
-                float to_ball_len = Vec3::length(to_ball);
-                if (to_ball_len < APC_EPSILON) continue;
-
-                Vec3 to_ball_dir = Vec3::scale(to_ball, 1.0f / to_ball_len);
-
-                // Kick force varies by action
-                float kick_force = 0.0f;
-
-                if (action == AIActionType::SHOOT_BALL) {
-                    // Shoot: hard kick toward opponent goal
-                    float goal_x = (a.team == TEAM_HOME) ? half_field : -half_field;
-                    Vec3 to_goal(goal_x - ball->position.x, 0.0f,
-                                 0.0f - ball->position.z);
-                    float goal_dist = Vec3::length(to_goal);
-                    if (goal_dist > APC_EPSILON) {
-                        kick_force = 20.0f; // Strong shot
-                        Vec3 kick_dir = Vec3::scale(to_goal, 1.0f / goal_dist);
-                        ball->velocity.x += kick_dir.x * kick_force;
-                        ball->velocity.y += 2.0f; // Slight lift
-                        ball->velocity.z += kick_dir.z * kick_force;
+                float dist_3d = Vec3::length(diff);
+                if (a.team == TEAM_HOME) {
+                    if (dist_xz < closest_home_dist_xz) {
+                        closest_home_dist_xz = dist_xz;
+                        closest_home_dist = dist_3d;
+                        closest_home_idx = static_cast<int32_t>(i);
                     }
-
-                } else if (action == AIActionType::CHASE_BALL ||
-                           action == AIActionType::PRESS ||
-                           action == AIActionType::INTERCEPT) {
-                    // Dribble: gentle touch in movement direction
-                    Vec3 move_dir = a.current_intent.move_direction;
-                    float move_mag = Vec3::length(move_dir);
-                    if (move_mag > APC_EPSILON) {
-                        kick_force = 4.0f; // Gentle touch (reduced from 5.0)
-                        Vec3 kick_dir = Vec3::scale(move_dir, 1.0f / move_mag);
-                        ball->velocity.x += kick_dir.x * kick_force;
-                        ball->velocity.z += kick_dir.z * kick_force;
-                    } else {
-                        // Just nudge ball forward
-                        kick_force = 2.5f;
-                        ball->velocity.x += to_ball_dir.x * kick_force;
-                        ball->velocity.z += to_ball_dir.z * kick_force;
+                } else if (a.team == TEAM_AWAY) {
+                    if (dist_xz < closest_away_dist_xz) {
+                        closest_away_dist_xz = dist_xz;
+                        closest_away_dist = dist_3d;
+                        closest_away_idx = static_cast<int32_t>(i);
                     }
-
-                } else if (action == AIActionType::SUPPORT_RUN ||
-                           action == AIActionType::MOVE_TO_POSITION) {
-                    // Light touch when passing through
-                    if (to_ball_len < a.radius + ball->radius + 0.3f) {
-                        kick_force = 2.0f;
-                        ball->velocity.x += to_ball_dir.x * kick_force;
-                        ball->velocity.z += to_ball_dir.z * kick_force;
-                    }
-                }
-
-                // Limit ball max speed to prevent runaway
-                float ball_speed = Vec3::length(ball->velocity);
-                static constexpr float MAX_BALL_SPEED = 35.0f; // ~126 km/h
-                if (ball_speed > MAX_BALL_SPEED) {
-                    float scale = MAX_BALL_SPEED / ball_speed;
-                    ball->velocity.x *= scale;
-                    ball->velocity.y *= scale;
-                    ball->velocity.z *= scale;
                 }
             }
         }
 
+        // Helper lambda: apply kick from an athlete to ball
+        // Returns true if a kick was applied
+        const auto apply_kick = [&](uint32_t idx, TeamId controlling_team) -> bool {
+            AthleteEntity& a = entity_manager.athletes[idx];
+            if (!a.id.is_valid() || !a.is_active) return false;
+
+            Vec3 diff = Vec3::sub(ball->position, a.position);
+            float dist_xz = std::sqrt(diff.x * diff.x + diff.z * diff.z);
+            float dist_y = std::abs(diff.y);
+            float kick_range = a.radius + ball->radius + 0.8f;
+            float ground_reach = a.height * 0.6f;
+
+            if (dist_xz >= kick_range || dist_y >= ground_reach) return false;
+
+            Vec3 to_ball = diff;
+            to_ball.y = 0.0f;
+            float to_ball_len = Vec3::length(to_ball);
+            if (to_ball_len < APC_EPSILON) return false;
+
+            Vec3 to_ball_dir = Vec3::scale(to_ball, 1.0f / to_ball_len);
+            AIActionType action = static_cast<AIActionType>(a.flags & 0xFFu);
+            float kick_force = 0.0f;
+
+            // Possession team can do offensive actions
+            // Opponents can only TACKLE/INTERCEPT (which dispossesses)
+            bool is_opponent = (a.team != controlling_team);
+            bool ball_is_free = (controlling_team == TEAM_NONE);
+
+            if (is_opponent) {
+                // Opponents can only TACKLE or INTERCEPT
+                if (action == AIActionType::TACKLE || action == AIActionType::INTERCEPT) {
+                    // Tackle: dispossess the ball
+                    ball->possession_team = a.team;
+                    last_ball_toucher = a.id;
+                    last_possession_team = a.team;
+                    possession_timer = POSSESSION_WINDOW;
+                    // Small deflection on tackle
+                    kick_force = 2.0f;
+                    ball->velocity.x += to_ball_dir.x * kick_force;
+                    ball->velocity.z += to_ball_dir.z * kick_force;
+                    return true;
+                }
+                return false; // Other actions blocked for opponents
+            }
+
+            // This athlete is on the controlling team (or ball is free)
+            // Update possession tracking
+            last_ball_toucher = a.id;
+            last_possession_team = a.team;
+            possession_timer = POSSESSION_WINDOW;
+            if (ball_is_free) {
+                ball->possession_team = a.team; // Claim possession
+            }
+
+            if (action == AIActionType::SHOOT_BALL) {
+                // Shoot: hard kick toward opponent goal
+                float goal_x = (a.team == TEAM_HOME) ? half_field : -half_field;
+                Vec3 to_goal(goal_x - ball->position.x, 0.0f,
+                             0.0f - ball->position.z);
+                float goal_dist = Vec3::length(to_goal);
+                if (goal_dist > APC_EPSILON) {
+                    kick_force = 20.0f; // Strong shot
+                    Vec3 kick_dir = Vec3::scale(to_goal, 1.0f / goal_dist);
+                    ball->velocity.x += kick_dir.x * kick_force;
+                    ball->velocity.y += 2.0f; // Slight lift
+                    ball->velocity.z += kick_dir.z * kick_force;
+                }
+
+            } else if (action == AIActionType::CHASE_BALL ||
+                       action == AIActionType::PRESS ||
+                       action == AIActionType::INTERCEPT) {
+                // Dribble: gentle touch in movement direction
+                Vec3 move_dir = a.current_intent.move_direction;
+                float move_mag = Vec3::length(move_dir);
+                if (move_mag > APC_EPSILON) {
+                    kick_force = 4.0f; // Gentle touch
+                    Vec3 kick_dir = Vec3::scale(move_dir, 1.0f / move_mag);
+                    ball->velocity.x += kick_dir.x * kick_force;
+                    ball->velocity.z += kick_dir.z * kick_force;
+                } else {
+                    // Just nudge ball forward
+                    kick_force = 2.5f;
+                    ball->velocity.x += to_ball_dir.x * kick_force;
+                    ball->velocity.z += to_ball_dir.z * kick_force;
+                }
+
+            } else if (action == AIActionType::SUPPORT_RUN ||
+                       action == AIActionType::MOVE_TO_POSITION ||
+                       action == AIActionType::FORMATION_HOLD) {
+                // Light touch when passing through
+                if (to_ball_len < a.radius + ball->radius + 0.3f) {
+                    kick_force = 2.0f;
+                    ball->velocity.x += to_ball_dir.x * kick_force;
+                    ball->velocity.z += to_ball_dir.z * kick_force;
+                }
+            }
+
+            // Limit ball max speed to prevent runaway
+            float ball_speed = Vec3::length(ball->velocity);
+            static constexpr float MAX_BALL_SPEED = 35.0f; // ~126 km/h
+            if (ball_speed > MAX_BALL_SPEED) {
+                float scale = MAX_BALL_SPEED / ball_speed;
+                ball->velocity.x *= scale;
+                ball->velocity.y *= scale;
+                ball->velocity.z *= scale;
+            }
+
+            return kick_force > 0.0f;
+        };
+
+        // Apply kicks: the closest on each team gets to interact
+        // Ball is controlled by the team with possession_team, or TEAM_NONE if free
+        TeamId controlling_team = ball->possession_team;
+
+        // Home team's closest player interacts first
+        if (closest_home_idx >= 0) {
+            apply_kick(static_cast<uint32_t>(closest_home_idx), controlling_team);
+        }
+        // Away team's closest player interacts (may have updated controlling_team above)
+        if (closest_away_idx >= 0) {
+            apply_kick(static_cast<uint32_t>(closest_away_idx), ball->possession_team);
+        }
+
+        // --- Extra deceleration for slow-moving ball (simulates grass/turf grip) ---
+        {
+            float ball_speed_xz = std::sqrt(ball->velocity.x * ball->velocity.x + ball->velocity.z * ball->velocity.z);
+            if (ball_speed_xz > 0.01f && ball_speed_xz < 3.0f && ball->position.y <= ball->radius + 0.05f) {
+                float slow_friction = 1.5f * game_loop_dt; // Extra grip at low speeds
+                if (slow_friction > 0.95f) slow_friction = 0.95f;
+                float new_speed = ball_speed_xz * (1.0f - slow_friction);
+                if (new_speed < 0.01f) new_speed = 0.0f;
+                float scale = new_speed / ball_speed_xz;
+                ball->velocity.x *= scale;
+                ball->velocity.z *= scale;
+            }
+        }
+
         // --- Update possession timer ---
+        // (Possession is also set by apply_kick above on each touch)
         if (possession_timer > 0.0f) {
             possession_timer -= game_loop_dt;
             if (possession_timer <= 0.0f) {

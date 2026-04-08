@@ -240,9 +240,18 @@ struct UtilityAI {
             break;
 
         case AIActionType::INTERCEPT:
-            // Good when ball is nearby and moving fast (not implemented yet, use proximity)
-            result *= (dist_ball < 10.0f) ? (1.0f - dist_ball / 10.0f) : 0.05f;
+            // Good when ball is moving toward this player and opponent has possession
+            result *= (dist_ball < 15.0f) ? (1.0f - dist_ball / 15.0f) : 0.02f;
             result *= (1.0f - 0.5f * possession); // Intercept when opponent has ball
+            // Bonus when close to ball trajectory line (between ball and own goal)
+            {
+                float dist_opp = (input_count > 2) ? inputs[2] : 30.0f;
+                // More valuable when opponent is nearby pressing
+                if (dist_opp < 8.0f) {
+                    result *= 1.3f;
+                }
+            }
+            result *= (0.5f + 0.5f * stamina);
             break;
 
         case AIActionType::TACKLE:
@@ -272,7 +281,12 @@ struct UtilityAI {
             // Stay close to nearest opponent, especially in defensive zone
             {
                 float dist_opp = (input_count > 2) ? inputs[2] : 30.0f;
-                result *= (dist_opp < 5.0f) ? 0.8f : 0.15f;
+                // Minimum distance threshold: don't mark if no opponents nearby
+                if (dist_opp > 10.0f) {
+                    result *= 0.02f;
+                } else {
+                    result *= (dist_opp < 5.0f) ? 0.8f : 0.15f;
+                }
                 result *= (1.0f - 0.5f * possession); // Mark more when defending
                 // More important near own goal
                 result *= (dist_goal > 25.0f) ? 0.6f : 1.0f;
