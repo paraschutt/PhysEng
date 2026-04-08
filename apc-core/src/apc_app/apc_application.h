@@ -42,6 +42,47 @@ static constexpr uint32_t MAX_NAME_LENGTH = 64;
 static constexpr uint32_t MAX_PATH_LENGTH = 256;
 
 // =============================================================================
+// AI Debug Helpers — action/role name strings for logging
+// =============================================================================
+static APC_FORCEINLINE const char* ai_action_name(AIActionType a) {
+    switch (a) {
+    case AIActionType::IDLE:            return "IDLE";
+    case AIActionType::MOVE_TO_POSITION: return "MOVE";
+    case AIActionType::CHASE_BALL:      return "CHASE";
+    case AIActionType::PASS_BALL:       return "PASS";
+    case AIActionType::SHOOT_BALL:      return "SHOOT";
+    case AIActionType::TACKLE:          return "TACKLE";
+    case AIActionType::BLOCK:           return "BLOCK";
+    case AIActionType::INTERCEPT:       return "INTERCEPT";
+    case AIActionType::MARK_OPPONENT:   return "MARK";
+    case AIActionType::SUPPORT_RUN:     return "SUPPORT";
+    case AIActionType::CROSS:           return "CROSS";
+    case AIActionType::HEADER:          return "HEADER";
+    case AIActionType::DIVE_SAVE:       return "DIVESAVE";
+    case AIActionType::PUNT:            return "PUNT";
+    case AIActionType::FORMATION_HOLD:  return "HOLD";
+    case AIActionType::PRESS:           return "PRESS";
+    default:                            return "???";
+    }
+}
+
+static APC_FORCEINLINE const char* sport_role_name(SportRole r) {
+    switch (r) {
+    case SportRole::SOCCER_GK:  return "GK";
+    case SportRole::SOCCER_CB:  return "CB";
+    case SportRole::SOCCER_LB:  return "LB";
+    case SportRole::SOCCER_RB:  return "RB";
+    case SportRole::SOCCER_CDM: return "CDM";
+    case SportRole::SOCCER_CM:  return "CM";
+    case SportRole::SOCCER_CAM: return "CAM";
+    case SportRole::SOCCER_LW:  return "LW";
+    case SportRole::SOCCER_RW:  return "RW";
+    case SportRole::SOCCER_ST:  return "ST";
+    default:                   return "SUB";
+    }
+}
+
+// =============================================================================
 // ApplicationConfig — Top-level application settings
 // =============================================================================
 struct ApplicationConfig {
@@ -210,6 +251,10 @@ struct Application {
         // --- Physics step loop ---
         while (game_loop.should_step_physics()) {
             perf.begin_frame();
+
+            // --- FIX: Clear debug draw list each physics step to prevent trail artifacts ---
+            debug_draw_list.clear();
+
             float phys_dt = game_loop.time.fixed_delta;
 
             // --- 1. Convert human input to motor intents ---
@@ -238,6 +283,12 @@ struct Application {
             // Pre-compute team athlete indices for team counts
             uint32_t home_player_idx = 0u;
             uint32_t away_player_idx = 0u;
+
+            // Per-player formation targets (for debug visualization)
+            Vec3 player_formation_targets[MAX_ATHLETES];
+            for (uint32_t ii = 0u; ii < scene.entity_manager.athlete_count; ++ii) {
+                player_formation_targets[ii] = scene.entity_manager.athletes[ii].position;
+            }
 
             for (uint32_t i = 0u; i < scene.entity_manager.athlete_count; ++i) {
                 AthleteEntity& a = scene.entity_manager.athletes[i];
@@ -280,6 +331,8 @@ struct Application {
                 form_pos_pq.x *= half_field;
                 form_pos_pq.z *= scene.config.field_width * 0.5f;
                 form_pos_pq.y = 0.0f;
+                // FIX: Mirror formation for away team (they defend opposite goal)
+                if (a.team == TEAM_AWAY) { form_pos_pq.x = -form_pos_pq.x; }
                 float dist_to_formation = Vec3::length(Vec3::sub(a.position, form_pos_pq));
                 float position_quality = 1.0f - std::min(dist_to_formation / 20.0f, 1.0f);
 
@@ -295,6 +348,11 @@ struct Application {
                 };
 
                 uint32_t team_idx = (a.team == TEAM_HOME) ? 0u : 1u;
+
+                // FIX: Per-player role weights — each position gets its own role profile
+                // Previously both teams used CM weights for ALL players, causing bunching.
+                scene.utility_ai[team_idx].configure_role(a.role);
+
                 UtilityScore decision = scene.utility_ai[team_idx].evaluate(
                     context_inputs, 8u);
 
@@ -317,6 +375,14 @@ struct Application {
                 formation_pos.x *= half_field;
                 formation_pos.z *= scene.config.field_width * 0.5f;
                 formation_pos.y = 0.0f;
+
+                // FIX: Mirror formation for away team (they defend opposite goal)
+                if (a.team == TEAM_AWAY) { formation_pos.x = -formation_pos.x; }
+
+                // Store formation target for debug visualization
+                if (i < MAX_ATHLETES) {
+                    player_formation_targets[i] = formation_pos;
+                }
 
                 // Select steering target based on chosen action
                 Vec3 steer_target = formation_pos; // Default: hold formation
@@ -594,8 +660,10 @@ struct Application {
                     FormationDebugEntry fe;
                     fe.entity_id = a.id;
                     fe.actual_position = a.position;
-                    fe.formation_position = a.position;
-                    fe.ball_influenced_position = a.position;
+                    // FIX: Use computed formation target instead of current position
+                    fe.formation_position = (i < MAX_ATHLETES)
+                        ? player_formation_targets[i] : a.position;
+                    fe.ball_influenced_position = fe.formation_position;
                     ai_debug.add_formation_entry(fe);
 
                     UtilityDebugEntry ue;
@@ -616,6 +684,62 @@ struct Application {
         // --- Print performance report ---
         perf.end_frame();
         perf.print_report(240); // Print every 240 physics steps (1 second)
+
+        // --- Simulation state log (every 480 steps = 2 seconds) ---
+        if (game_loop.time.physics_step_count % 480u == 0u &&
+            game_loop.time.physics_step_count > 0u) {
+            const BallEntity* log_ball = scene.entity_manager.find_ball();
+            uint32_t step = game_loop.time.physics_step_count;
+            float sim_t = scene.match_time_seconds;
+
+            std::fprintf(stdout, "\n=== Sim State [step %u] time=%.1fs ===\n", step, sim_t);
+
+            // Ball state
+            if (log_ball && log_ball->id.is_valid()) {
+                float bspeed = Vec3::length(log_ball->velocity);
+                const char* poss = (log_ball->possession_team == TEAM_HOME) ? "HOME"
+                    : (log_ball->possession_team == TEAM_AWAY) ? "AWAY" : "NONE";
+                std::fprintf(stdout,
+                    "  Ball: pos=(%.1f, %.2f, %.1f) vel=(%.1f, %.1f, %.1f) |v|=%.1f m/s poss=%s\n",
+                    log_ball->position.x, log_ball->position.y, log_ball->position.z,
+                    log_ball->velocity.x, log_ball->velocity.y, log_ball->velocity.z,
+                    bspeed, poss);
+            }
+
+            // Per-player state
+            uint32_t action_counts[16] = {};
+            for (uint32_t i = 0u; i < scene.entity_manager.athlete_count; ++i) {
+                const AthleteEntity& a = scene.entity_manager.athletes[i];
+                if (!a.id.is_valid() || !a.is_active) continue;
+
+                float dist_b = log_ball
+                    ? Vec3::length(Vec3::sub(a.position, log_ball->position)) : 999.0f;
+                float speed = Vec3::length(a.velocity);
+                AIActionType act = static_cast<AIActionType>(a.flags & 0xFFu);
+                uint32_t act_idx = static_cast<uint32_t>(act);
+                if (act_idx < 16u) ++action_counts[act_idx];
+
+                const char* team_str = (a.team == TEAM_HOME) ? "H" : "A";
+                std::fprintf(stdout,
+                    "  %s %2u:%-3s pos=(%6.1f,%5.1f) vel=%4.1f m/s act=%-8s dist_ball=%5.1f stam=%.2f\n",
+                    team_str, a.jersey_number,
+                    sport_role_name(a.role),
+                    a.position.x, a.position.z, speed,
+                    ai_action_name(act), dist_b, a.stamina);
+            }
+
+            // Action distribution summary
+            std::fprintf(stdout, "  Actions:");
+            for (uint32_t c = 0u; c < 16u; ++c) {
+                if (action_counts[c] > 0u) {
+                    std::fprintf(stdout, " %s=%u",
+                        ai_action_name(static_cast<AIActionType>(c)), action_counts[c]);
+                }
+            }
+            std::fprintf(stdout, "\n  Score: Home %u - %u Away\n",
+                scene.home_score, scene.away_score);
+            std::fprintf(stdout, "================================\n");
+        }
     }
 
     // =========================================================================
