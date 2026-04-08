@@ -251,6 +251,22 @@ struct Application {
                 float has_possession = (dist_to_ball <= closest_own_dist) ? 1.0f : 0.0f;
 
                 // Feed context factors to UtilityAI (team 0 = home, team 1 = away)
+                // Pre-compute formation position for position_quality below
+                uint32_t form_idx_pq = (a.team == TEAM_HOME)
+                    ? home_player_idx : away_player_idx;
+                float possession_factor_pq = 0.3f + 0.7f * has_possession;
+                Vec3 form_pos_pq = scene.formation_system.get_formation_position(
+                    static_cast<uint8_t>(form_idx_pq),
+                    ball_pos,
+                    Vec3(own_goal_x, 0.0f, 0.0f),
+                    Vec3(opp_goal_x, 0.0f, 0.0f),
+                    possession_factor_pq);
+                form_pos_pq.x *= half_field;
+                form_pos_pq.z *= scene.config.field_width * 0.5f;
+                form_pos_pq.y = 0.0f;
+                float dist_to_formation = Vec3::length(Vec3::sub(a.position, form_pos_pq));
+                float position_quality = 1.0f - std::min(dist_to_formation / 20.0f, 1.0f);
+
                 float context_inputs[8] = {
                     dist_to_ball,           // CONTEXT 0: DISTANCE_TO_BALL
                     dist_opp_goal,          // CONTEXT 1: DISTANCE_TO_GOAL
@@ -259,7 +275,7 @@ struct Application {
                     has_possession,         // CONTEXT 4: TEAM_POSSESSION
                     1.0f,                   // CONTEXT 5: TIME_REMAINING (always full for now)
                     0.0f,                   // CONTEXT 6: SCORE_DIFFERENTIAL
-                    0.5f                    // CONTEXT 7: POSITION_QUALITY
+                    position_quality         // CONTEXT 7: POSITION_QUALITY
                 };
 
                 uint32_t team_idx = (a.team == TEAM_HOME) ? 0u : 1u;
@@ -353,6 +369,56 @@ struct Application {
                     break;
 
                 case AIActionType::FORMATION_HOLD:
+                case AIActionType::TACKLE:
+                    // TACKLE: steer toward nearest opponent within range
+                    {
+                        float nearest_opp_dist = 999.0f;
+                        Vec3 nearest_opp_pos = a.position;
+                        for (uint32_t j = 0u; j < scene.entity_manager.athlete_count; ++j) {
+                            const AthleteEntity& opp = scene.entity_manager.athletes[j];
+                            if (!opp.id.is_valid() || opp.team == a.team) continue;
+                            float d = Vec3::length(Vec3::sub(opp.position, a.position));
+                            if (d < nearest_opp_dist) {
+                                nearest_opp_dist = d;
+                                nearest_opp_pos = opp.position;
+                            }
+                        }
+                        static constexpr float TACKLE_RANGE = 3.0f;
+                        if (nearest_opp_dist < TACKLE_RANGE) {
+                            steer_target = nearest_opp_pos;
+                            urgency = 0.95f;
+                        } else {
+                            steer_target = formation_pos;
+                            urgency = 0.3f;
+                        }
+                    }
+                    break;
+
+                case AIActionType::PASS_BALL:
+                    // PASS_BALL: steer toward ball, then pass to nearest forward teammate
+                    if (dist_to_ball < 2.0f && ball) {
+                        // Find best teammate to pass to (furthest forward same-team)
+                        float best_forward = -999.0f;
+                        Vec3 best_teammate_pos = a.position;
+                        for (uint32_t j = 0u; j < scene.entity_manager.athlete_count; ++j) {
+                            if (j == i) continue;
+                            const AthleteEntity& tm = scene.entity_manager.athletes[j];
+                            if (!tm.id.is_valid() || tm.team != a.team) continue;
+                            float fwd = (a.team == TEAM_HOME) ? tm.position.x : -tm.position.x;
+                            float dist = Vec3::length(Vec3::sub(tm.position, a.position));
+                            if (fwd > best_forward && dist > 3.0f && dist < 30.0f) {
+                                best_forward = fwd;
+                                best_teammate_pos = tm.position;
+                            }
+                        }
+                        steer_target = best_teammate_pos;
+                        urgency = 0.9f;
+                    } else {
+                        steer_target = ball_pos;
+                        urgency = 0.7f;
+                    }
+                    break;
+
                 default:
                     steer_target = formation_pos;
                     urgency = 0.2f;

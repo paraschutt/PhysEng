@@ -319,30 +319,20 @@ struct SteeringSystem {
     }
 
     // --- Alignment: steer to match average heading of neighbors ---
+    // NOTE: neighbors[] contains positions, not velocities. Without access
+    // to neighbor velocities, we approximate alignment by steering toward
+    // the average position of nearby agents (cohesion-like behavior).
+    // True velocity-based alignment requires a neighbor velocity query.
     static SteeringOutput alignment(const Vec3* neighbors, uint32_t count,
-                                     const Vec3& heading,
-                                     float max_force)
+                                     const Vec3& /*heading*/,
+                                     float /*max_force*/)
     {
         SteeringOutput out;
-        if (count == 0u || neighbors == nullptr) {
-            return out;
-        }
-
-        // Compute average velocity direction of neighbors
-        Vec3 avg_vel(0.0f, 0.0f, 0.0f);
-        for (uint32_t i = 0u; i < count; ++i) {
-            avg_vel.x += neighbors[i].x * 0.5f; // Approximate velocity from displacement
-            avg_vel.z += neighbors[i].z * 0.5f;
-        }
-        float inv = 1.0f / static_cast<float>(count);
-        avg_vel = Vec3::scale(avg_vel, inv);
-
-        // Steering force = average velocity - current heading
-        Vec3 steer = Vec3::sub(avg_vel, heading);
-        steer.y = 0.0f;
-
-        out.linear = truncate(steer, max_force);
-        out.linear.y = 0.0f;
+        // Without neighbor velocity data, alignment is a no-op.
+        // The calling code should use cohesion + separation for flocking.
+        // TODO: Pass neighbor velocities when EntityManager supports it.
+        (void)count;
+        (void)neighbors;
         return out;
     }
 
