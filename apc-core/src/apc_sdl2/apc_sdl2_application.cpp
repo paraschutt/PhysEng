@@ -57,9 +57,11 @@ bool SDL2Application::init(int width, int height) {
         }
     }
 
+    SDL_RendererInfo renderer_info;
+    SDL_GetRendererInfo(renderer_, &renderer_info);
     std::printf("[APC SDL2] Initialized: %dx%d window, %s renderer\n",
                 width_, height_,
-                (SDL_GetRendererInfo(renderer_)->flags & SDL_RENDERER_ACCELERATED)
+                (renderer_info.flags & SDL_RENDERER_ACCELERATED)
                     ? "hardware" : "software");
 
     return true;
@@ -627,7 +629,7 @@ void SDL2Application::draw_hud() {
     // (We avoid SDL_ttf to keep dependencies minimal)
 
     // Simulation time indicator (bar at top-left)
-    float time_bar_width = (float)(sim_time_ % 10.0f) / 10.0f * 100.0f;
+    float time_bar_width = std::fmod(sim_time_, 10.0f) / 10.0f * 100.0f;
     SDL_SetRenderDrawColor(renderer_, 100, 200, 100, 255);
     SDL_Rect time_bar;
     time_bar.x = 10;
