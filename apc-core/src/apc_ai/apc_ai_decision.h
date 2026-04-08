@@ -220,9 +220,9 @@ struct UtilityAI {
             break;
 
         case AIActionType::MOVE_TO_POSITION:
-            // Default: always decent, higher when far from ball
-            result *= std::min(dist_ball / 40.0f, 1.0f); // Further = more likely
-            result *= 0.6f; // Moderate base score
+            // Decent base score, higher when far from ball
+            result *= std::min(dist_ball / 30.0f, 1.0f); // Further = more likely
+            result *= 0.7f; // Good base score for positional play
             break;
 
         case AIActionType::SUPPORT_RUN:
@@ -317,10 +317,10 @@ struct UtilityAI {
 
         case AIActionType::FORMATION_HOLD:
         default:
-            // Fallback: always reasonable
-            result = 0.3f;
-            // Higher when far from ball (just hold position)
-            result *= std::min(dist_ball / 30.0f, 1.0f);
+            // Solid default — holding position is always reasonable
+            result = 0.5f;
+            // Higher when far from ball (stay in position, don't chase)
+            result *= std::min(dist_ball / 25.0f, 1.0f);
             break;
         }
 
@@ -394,24 +394,26 @@ struct UtilityAI {
             role_weights[static_cast<uint32_t>(AIActionType::BLOCK)]           = 2.5f;
             role_weights[static_cast<uint32_t>(AIActionType::INTERCEPT)]       = 2.5f;
             role_weights[static_cast<uint32_t>(AIActionType::MARK_OPPONENT)]   = 2.5f;
-            role_weights[static_cast<uint32_t>(AIActionType::FORMATION_HOLD)]  = 2.0f;
-            role_weights[static_cast<uint32_t>(AIActionType::PRESS)]           = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::FORMATION_HOLD)]  = 3.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::CHASE_BALL)]      = 0.3f; // Defenders rarely chase
+            role_weights[static_cast<uint32_t>(AIActionType::PRESS)]           = 1.0f;
             break;
 
         case SportRole::SOCCER_CDM:
             role_weights[static_cast<uint32_t>(AIActionType::INTERCEPT)]       = 3.0f;
             role_weights[static_cast<uint32_t>(AIActionType::TACKLE)]          = 2.5f;
             role_weights[static_cast<uint32_t>(AIActionType::SUPPORT_RUN)]     = 2.0f;
-            role_weights[static_cast<uint32_t>(AIActionType::FORMATION_HOLD)]  = 2.0f;
-            role_weights[static_cast<uint32_t>(AIActionType::PRESS)]           = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::FORMATION_HOLD)]  = 3.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::CHASE_BALL)]      = 0.5f; // CDM rarely chases
+            role_weights[static_cast<uint32_t>(AIActionType::PRESS)]           = 1.5f;
             break;
 
         case SportRole::SOCCER_CM:
             role_weights[static_cast<uint32_t>(AIActionType::SUPPORT_RUN)]     = 2.5f;
             role_weights[static_cast<uint32_t>(AIActionType::PASS_BALL)]       = 2.5f;
             role_weights[static_cast<uint32_t>(AIActionType::INTERCEPT)]       = 2.0f;
-            role_weights[static_cast<uint32_t>(AIActionType::CHASE_BALL)]      = 2.0f;
-            role_weights[static_cast<uint32_t>(AIActionType::FORMATION_HOLD)]  = 1.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::CHASE_BALL)]      = 0.5f; // CM stays in position
+            role_weights[static_cast<uint32_t>(AIActionType::FORMATION_HOLD)]  = 2.5f;
             break;
 
         case SportRole::SOCCER_CAM:
@@ -421,7 +423,8 @@ struct UtilityAI {
             role_weights[static_cast<uint32_t>(AIActionType::SHOOT_BALL)]      = 2.5f;
             role_weights[static_cast<uint32_t>(AIActionType::CROSS)]           = 2.5f;
             role_weights[static_cast<uint32_t>(AIActionType::SUPPORT_RUN)]     = 2.0f;
-            role_weights[static_cast<uint32_t>(AIActionType::MOVE_TO_POSITION)] = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::MOVE_TO_POSITION)] = 2.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::CHASE_BALL)]      = 0.8f;
             break;
 
         case SportRole::SOCCER_ST:

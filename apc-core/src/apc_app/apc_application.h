@@ -290,6 +290,48 @@ struct Application {
                 player_formation_targets[ii] = scene.entity_manager.athletes[ii].position;
             }
 
+            // --- Chase budget: only nearest N players per team may chase ---
+            // Pre-compute per-team distance-to-ball rankings
+            struct ChaseRank { uint32_t idx; float dist; };
+            ChaseRank home_ranks[MAX_ATHLETES];
+            ChaseRank away_ranks[MAX_ATHLETES];
+            uint32_t home_rank_count = 0u, away_rank_count = 0u;
+            for (uint32_t ii = 0u; ii < scene.entity_manager.athlete_count; ++ii) {
+                const AthleteEntity& aa = scene.entity_manager.athletes[ii];
+                if (!aa.id.is_valid() || aa.is_human_controlled) continue;
+                float d = Vec3::length(Vec3::sub(aa.position, ball_pos));
+                if (aa.team == TEAM_HOME && home_rank_count < MAX_ATHLETES) {
+                    home_ranks[home_rank_count++] = { ii, d };
+                } else if (aa.team == TEAM_AWAY && away_rank_count < MAX_ATHLETES) {
+                    away_ranks[away_rank_count++] = { ii, d };
+                }
+            }
+            // Simple selection sort by distance (ascending) — small arrays
+            for (uint32_t ii = 0u; ii + 1u < home_rank_count; ++ii) {
+                for (uint32_t jj = ii + 1u; jj < home_rank_count; ++jj) {
+                    if (home_ranks[jj].dist < home_ranks[ii].dist) {
+                        ChaseRank tmp = home_ranks[ii]; home_ranks[ii] = home_ranks[jj]; home_ranks[jj] = tmp;
+                    }
+                }
+            }
+            for (uint32_t ii = 0u; ii + 1u < away_rank_count; ++ii) {
+                for (uint32_t jj = ii + 1u; jj < away_rank_count; ++jj) {
+                    if (away_ranks[jj].dist < away_ranks[ii].dist) {
+                        ChaseRank tmp = away_ranks[ii]; away_ranks[ii] = away_ranks[jj]; away_ranks[jj] = tmp;
+                    }
+                }
+            }
+            // Max 2 chasers per team (nearest + 2nd nearest)
+            static constexpr uint32_t MAX_CHASERS = 2u;
+            uint8_t home_can_chase[MAX_ATHLETES] = {};
+            uint8_t away_can_chase[MAX_ATHLETES] = {};
+            for (uint32_t ii = 0u; ii < home_rank_count && ii < MAX_CHASERS; ++ii) {
+                home_can_chase[home_ranks[ii].idx] = 1u;
+            }
+            for (uint32_t ii = 0u; ii < away_rank_count && ii < MAX_CHASERS; ++ii) {
+                away_can_chase[away_ranks[ii].idx] = 1u;
+            }
+
             for (uint32_t i = 0u; i < scene.entity_manager.athlete_count; ++i) {
                 AthleteEntity& a = scene.entity_manager.athletes[i];
                 if (!a.id.is_valid() || a.is_human_controlled) continue;
@@ -303,19 +345,26 @@ struct Application {
                 float opp_goal_x = (a.team == TEAM_HOME) ?  half_field : -half_field;
                 float dist_opp_goal = std::abs(a.position.x - opp_goal_x);
 
-                // Possession heuristic: is this team's player closest to ball?
-                float closest_own_dist = dist_to_ball;
-                for (uint32_t j = 0u; j < scene.entity_manager.athlete_count; ++j) {
-                    if (j == i) continue;
-                    const AthleteEntity& other = scene.entity_manager.athletes[j];
-                    if (!other.id.is_valid()) continue;
-                    if (other.team != a.team) continue;
-                    float other_dist = Vec3::length(Vec3::sub(other.position, ball_pos));
-                    if (other_dist < closest_own_dist) {
-                        closest_own_dist = other_dist;
+                // Possession heuristic: check scene-level possession tracker
+                // This uses the 1.5s possession window from ball interaction
+                float has_possession = 0.0f;
+                if (scene.last_possession_team == a.team && scene.possession_timer > 0.0f) {
+                    // Team has possession — boost this player's context
+                    // Only the nearest 2 players to ball get high possession factor
+                    float own_rank = 0u; // How far from ball (1st, 2nd, etc.)
+                    for (uint32_t j = 0u; j < scene.entity_manager.athlete_count; ++j) {
+                        if (j == i) continue;
+                        const AthleteEntity& other = scene.entity_manager.athletes[j];
+                        if (!other.id.is_valid() || other.team != a.team) continue;
+                        float other_dist = Vec3::length(Vec3::sub(other.position, ball_pos));
+                        if (other_dist < dist_to_ball) ++own_rank;
                     }
+                    has_possession = (own_rank == 0u) ? 1.0f : (own_rank == 1u) ? 0.5f : 0.2f;
                 }
-                float has_possession = (dist_to_ball <= closest_own_dist) ? 1.0f : 0.0f;
+
+                // Chase budget check: suppress CHASE_BALL if not in top-2 nearest
+                uint8_t can_chase = (a.team == TEAM_HOME)
+                    ? home_can_chase[i] : away_can_chase[i];
 
                 // Feed context factors to UtilityAI (team 0 = home, team 1 = away)
                 // Pre-compute formation position for position_quality below
@@ -336,10 +385,20 @@ struct Application {
                 float dist_to_formation = Vec3::length(Vec3::sub(a.position, form_pos_pq));
                 float position_quality = 1.0f - std::min(dist_to_formation / 20.0f, 1.0f);
 
+                // Compute actual nearest opponent distance for MARK_OPPONENT scoring
+                float nearest_opp_dist = 999.0f;
+                for (uint32_t j = 0u; j < scene.entity_manager.athlete_count; ++j) {
+                    if (j == i) continue;
+                    const AthleteEntity& opp = scene.entity_manager.athletes[j];
+                    if (!opp.id.is_valid() || opp.team == a.team) continue;
+                    float od = Vec3::length(Vec3::sub(opp.position, a.position));
+                    if (od < nearest_opp_dist) nearest_opp_dist = od;
+                }
+
                 float context_inputs[8] = {
                     dist_to_ball,           // CONTEXT 0: DISTANCE_TO_BALL
                     dist_opp_goal,          // CONTEXT 1: DISTANCE_TO_GOAL
-                    0.0f,                   // CONTEXT 2: DISTANCE_TO_OPPONENT (simplified)
+                    nearest_opp_dist,       // CONTEXT 2: DISTANCE_TO_OPPONENT (now real)
                     a.stamina,              // CONTEXT 3: STAMINA_PERCENT
                     has_possession,         // CONTEXT 4: TEAM_POSSESSION
                     1.0f,                   // CONTEXT 5: TIME_REMAINING (always full for now)
@@ -355,6 +414,15 @@ struct Application {
 
                 UtilityScore decision = scene.utility_ai[team_idx].evaluate(
                     context_inputs, 8u);
+
+                // Enforce chase budget: if player can't chase and chose CHASE,
+                // force them to HOLD formation instead
+                if (!can_chase &&
+                    (decision.action == AIActionType::CHASE_BALL ||
+                     decision.action == AIActionType::PRESS)) {
+                    decision.action = AIActionType::FORMATION_HOLD;
+                    decision.score *= 0.5f;
+                }
 
                 // --- 3b. Map AIActionType -> steering target ---
                 // Get formation position for this player

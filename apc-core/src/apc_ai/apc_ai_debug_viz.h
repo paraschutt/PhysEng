@@ -181,23 +181,21 @@ struct AIDebugVisualizer {
         uint16_t active = config.enabled_layers;
         if (active == 0u) return;
 
-        // --- STEERING_FORCES layer: arrows for steering forces ---
+        // --- STEERING_FORCES layer: directional arrows only ---
         if (is_layer_enabled(AIDebugLayer::STEERING_FORCES)) {
             for (uint32_t i = 0u; i < steering_count; ++i) {
                 const SteeringDebugEntry& e = steering_entries[i];
                 float force_len = Vec3::length(e.steering_force);
                 if (force_len < APC_EPSILON) continue;
 
-                float scale = config.visualization_scale;
-                Vec3 tip = Vec3::add(e.position,
-                    Vec3::scale(e.steering_force, scale));
+                Vec3 dir = Vec3::scale(e.steering_force, 1.0f / force_len);
+                float arrow_len = 2.0f * config.visualization_scale;
+                Vec3 tip = Vec3::add(e.position, Vec3::scale(dir, arrow_len));
 
                 draw_list.add_line(e.position, tip, config.steering_color);
 
                 // Arrowhead
-                Vec3 dir = Vec3::scale(e.steering_force, 1.0f / force_len);
-                float head_len = force_len * scale * 0.2f;
-                if (head_len < 0.01f) head_len = 0.01f;
+                float head_len = arrow_len * 0.25f;
                 Vec3 head_base = Vec3::sub(tip, Vec3::scale(dir, head_len));
 
                 Vec3 perp;
@@ -211,91 +209,22 @@ struct AIDebugVisualizer {
                                   config.steering_color);
                 draw_list.add_line(tip, Vec3::sub(head_base, Vec3::scale(perp, hw)),
                                   config.steering_color);
-
-                // Seek target marker (blue point)
-                if (Vec3::length(e.seek_target) > APC_EPSILON) {
-                    draw_list.add_point(e.seek_target,
-                        RenderColor::BLUE(), 4.0f);
-                }
             }
         }
 
-        // --- UTILITY_SCORES layer: points + bars for utility scores ---
+        // --- UTILITY_SCORES layer: disabled (not needed for current phase) ---
         if (is_layer_enabled(AIDebugLayer::UTILITY_SCORES)) {
-            for (uint32_t i = 0u; i < utility_count; ++i) {
-                const UtilityDebugEntry& e = utility_entries[i];
-                float score = e.confidence;
-                if (score < APC_EPSILON) continue;
-
-                // Clamp score
-                if (score > 1.0f) score = 1.0f;
-
-                // Bar above entity head
-                float bar_base_y = e.position.y + 2.0f;
-                float bar_top_y  = bar_base_y + 2.0f * score;
-
-                // Color: green (low) -> yellow (mid) -> red (high)
-                RenderColor bar_color;
-                if (score < 0.5f) {
-                    bar_color = RenderColor(2.0f * score, 1.0f, 0.0f, 0.8f);
-                } else {
-                    bar_color = RenderColor(1.0f, 2.0f * (1.0f - score), 0.0f, 0.8f);
-                }
-
-                // Vertical bar
-                float hw = 0.15f;
-                Vec3 bl(e.position.x - hw, bar_base_y, e.position.z);
-                Vec3 br(e.position.x + hw, bar_base_y, e.position.z);
-                Vec3 tl(e.position.x - hw, bar_top_y, e.position.z);
-                Vec3 tr(e.position.x + hw, bar_top_y, e.position.z);
-
-                draw_list.add_line(bl, tl, bar_color);
-                draw_list.add_line(br, tr, bar_color);
-                draw_list.add_line(tl, tr, bar_color);
-
-                // Background bar outline (gray)
-                RenderColor bg_color(0.3f, 0.3f, 0.3f, 0.5f);
-                Vec3 bg_top(e.position.x - hw, bar_base_y + 2.0f, e.position.z);
-                Vec3 bg_top_r(e.position.x + hw, bar_base_y + 2.0f, e.position.z);
-                draw_list.add_line(bl, bg_top, bg_color);
-                draw_list.add_line(br, bg_top_r, bg_color);
-                draw_list.add_line(bg_top, bg_top_r, bg_color);
-            }
+            // Utility score bars removed for visual clarity
         }
 
-        // --- FORMATION_POSITIONS layer: circles at formation, lines to actual ---
+        // --- FORMATION_POSITIONS layer: disabled (trails/clutter removed) ---
         if (is_layer_enabled(AIDebugLayer::FORMATION_POSITIONS)) {
-            for (uint32_t i = 0u; i < formation_count; ++i) {
-                const FormationDebugEntry& e = formation_entries[i];
-
-                // Formation position marker (green point)
-                Vec3 form_pos = Vec3::add(e.formation_position, Vec3(0.0f, 0.1f, 0.0f));
-                draw_list.add_point(form_pos, config.formation_color, 4.0f);
-
-                // Ball influenced position (teal point)
-                Vec3 ball_pos = Vec3::add(e.ball_influenced_position, Vec3(0.0f, 0.15f, 0.0f));
-                draw_list.add_point(ball_pos, RenderColor(0.0f, 0.8f, 0.8f, 0.6f), 3.0f);
-
-                // Line from formation to actual position
-                draw_list.add_line(form_pos, e.actual_position, config.formation_color);
-            }
+            // Formation lines and markers removed for visual clarity
         }
 
-        // --- MOTOR_INTENT layer: direction arrows ---
+        // --- MOTOR_INTENT layer: combined with STEERING_FORCES above ---
         if (is_layer_enabled(AIDebugLayer::MOTOR_INTENT)) {
-            // Draw from entity data (accessed via EntityManager externally)
-            // For now, draw from steering entries as proxy
-            for (uint32_t i = 0u; i < steering_count; ++i) {
-                const SteeringDebugEntry& e = steering_entries[i];
-                float force_len = Vec3::length(e.steering_force);
-                if (force_len < APC_EPSILON) continue;
-
-                Vec3 dir = Vec3::scale(e.steering_force, 1.0f / force_len);
-                float scale = config.visualization_scale * 0.7f;
-                Vec3 tip = Vec3::add(e.position, Vec3::scale(dir, scale));
-
-                draw_list.add_line(e.position, tip, config.intent_color);
-            }
+            // Motor intent arrows merged into STEERING_FORCES layer
         }
 
         // --- DECISION_TREE layer: placeholder ---

@@ -90,6 +90,14 @@ struct SceneState {
     uint32_t away_score        = 0u;
     float    match_time_seconds = 0.0f;
 
+    // --- Ball possession tracking ---
+    EntityId  last_ball_toucher   = EntityId::make_invalid();
+    TeamId    last_possession_team = TEAM_NONE;
+    float     possession_timer     = 0.0f; // Seconds since last touch
+    static constexpr float POSSESSION_WINDOW = 1.5f; // Ball stays "controlled" for 1.5s
+    uint8_t   ball_in_play         = 1u;
+    float     out_of_bounds_timer  = 0.0f; // Countdown before reset
+
     // =========================================================================
     // load_match — Create teams, spawn athletes, assign formations
     // =========================================================================
@@ -138,6 +146,11 @@ struct SceneState {
         home_score        = 0u;
         away_score        = 0u;
         match_time_seconds = 0.0f;
+        last_ball_toucher   = EntityId::make_invalid();
+        last_possession_team = TEAM_NONE;
+        possession_timer     = 0.0f;
+        ball_in_play         = 1u;
+        out_of_bounds_timer  = 0.0f;
 
         for (uint32_t i = 0u; i < MAX_AI_CONTROLLERS; ++i) {
             ai_controllers[i].reset();
@@ -310,6 +323,72 @@ struct SceneState {
         if (!ball) return;
 
         float half_field = config.field_length * 0.5f;
+        float half_width = config.field_width * 0.5f;
+        float goal_half_w = 3.66f; // Half of 7.32m goal width
+
+        // --- Out of bounds check ---
+        if (ball_in_play) {
+            bool oob = false;
+            if (ball->position.x < -(half_field + 2.0f) || ball->position.x > (half_field + 2.0f)) {
+                oob = true; // Beyond goal line (not in goal)
+            } else if (ball->position.z < -(half_width + 1.0f) || ball->position.z > (half_width + 1.0f)) {
+                oob = true; // Beyond touchline
+            }
+            // Check if actually IN goal (within goal posts)
+            bool in_goal = false;
+            if (std::abs(ball->position.z) < goal_half_w) {
+                if (ball->position.x > half_field + 0.5f) {
+                    // Ball in HOME goal → Away scores
+                    in_goal = true;
+                    ++away_score;
+                } else if (ball->position.x < -(half_field + 0.5f)) {
+                    // Ball in AWAY goal → Home scores
+                    in_goal = true;
+                    ++home_score;
+                }
+            }
+
+            if (in_goal) {
+                // Goal scored — reset to center
+                ball->position = Vec3(0.0f, 0.11f, 0.0f);
+                ball->velocity = Vec3(0.0f, 0.0f, 0.0f);
+                ball->angular_velocity = Vec3(0.0f, 0.0f, 0.0f);
+                ball->last_toucher = EntityId::make_invalid();
+                ball->possession_team = TEAM_NONE;
+                last_ball_toucher = EntityId::make_invalid();
+                last_possession_team = TEAM_NONE;
+                possession_timer = 0.0f;
+            } else if (oob) {
+                // Out of bounds — stop ball and reset after brief pause
+                ball->velocity = Vec3(0.0f, 0.0f, 0.0f);
+                ball_in_play = 0;
+                out_of_bounds_timer = 0.5f; // 0.5s pause then reset
+            }
+        } else {
+            // Ball is out of play — count down then reset
+            out_of_bounds_timer -= game_loop_dt;
+            if (out_of_bounds_timer <= 0.0f) {
+                // Reset ball to nearest touchline/goal-line point
+                float bx = ball->position.x;
+                float bz = ball->position.z;
+                // Clamp to field boundary
+                if (bx < -(half_field + 1.0f)) bx = -(half_field + 0.5f);
+                else if (bx > (half_field + 1.0f)) bx = half_field + 0.5f;
+                if (bz < -(half_width + 1.0f)) bz = -(half_width + 0.5f);
+                else if (bz > (half_width + 1.0f)) bz = half_width + 0.5f;
+                // If beyond goal line, reset to center instead
+                if (std::abs(bx) > half_field) {
+                    bx = 0.0f; bz = 0.0f;
+                }
+                ball->position = Vec3(bx, 0.11f, bz);
+                ball->velocity = Vec3(0.0f, 0.0f, 0.0f);
+                ball->possession_team = TEAM_NONE;
+                last_possession_team = TEAM_NONE;
+                possession_timer = 0.0f;
+                ball_in_play = 1u;
+            }
+            return; // Skip athlete interactions while out of play
+        }
 
         for (uint32_t i = 0u; i < entity_manager.athlete_count; ++i) {
             AthleteEntity& a = entity_manager.athletes[i];
@@ -326,6 +405,12 @@ struct SceneState {
 
             if (dist_xz < kick_range && dist_y < ground_reach) {
                 // --- Athlete is close enough to interact with ball ---
+
+                // Update possession tracking
+                last_ball_toucher = a.id;
+                last_possession_team = a.team;
+                possession_timer = POSSESSION_WINDOW;
+                ball->possession_team = a.team;
 
                 // Get AI action from stored flags
                 AIActionType action = static_cast<AIActionType>(a.flags & 0xFFu);
@@ -354,8 +439,6 @@ struct SceneState {
                         ball->velocity.y += 2.0f; // Slight lift
                         ball->velocity.z += kick_dir.z * kick_force;
                     }
-                    ball->last_toucher = a.id;
-                    ball->possession_team = a.team;
 
                 } else if (action == AIActionType::CHASE_BALL ||
                            action == AIActionType::PRESS ||
@@ -364,18 +447,16 @@ struct SceneState {
                     Vec3 move_dir = a.current_intent.move_direction;
                     float move_mag = Vec3::length(move_dir);
                     if (move_mag > APC_EPSILON) {
-                        kick_force = 5.0f; // Gentle touch
+                        kick_force = 4.0f; // Gentle touch (reduced from 5.0)
                         Vec3 kick_dir = Vec3::scale(move_dir, 1.0f / move_mag);
                         ball->velocity.x += kick_dir.x * kick_force;
                         ball->velocity.z += kick_dir.z * kick_force;
                     } else {
                         // Just nudge ball forward
-                        kick_force = 3.0f;
+                        kick_force = 2.5f;
                         ball->velocity.x += to_ball_dir.x * kick_force;
                         ball->velocity.z += to_ball_dir.z * kick_force;
                     }
-                    ball->last_toucher = a.id;
-                    ball->possession_team = a.team;
 
                 } else if (action == AIActionType::SUPPORT_RUN ||
                            action == AIActionType::MOVE_TO_POSITION) {
@@ -384,31 +465,27 @@ struct SceneState {
                         kick_force = 2.0f;
                         ball->velocity.x += to_ball_dir.x * kick_force;
                         ball->velocity.z += to_ball_dir.z * kick_force;
-                        ball->last_toucher = a.id;
-                        ball->possession_team = a.team;
                     }
                 }
 
-                // Check for goal: ball past goal line
-                if (ball->position.x > half_field + 1.0f) {
-                    // Away team scores (or home concedes)
-                    if (a.team == TEAM_AWAY) {
-                        ++away_score;
-                    }
-                    // Reset ball to center
-                    ball->position = Vec3(0.0f, 0.11f, 0.0f);
-                    ball->velocity = Vec3(0.0f, 0.0f, 0.0f);
-                    ball->angular_velocity = Vec3(0.0f, 0.0f, 0.0f);
-                } else if (ball->position.x < -(half_field + 1.0f)) {
-                    // Home team scores (or away concedes)
-                    if (a.team == TEAM_HOME) {
-                        ++home_score;
-                    }
-                    // Reset ball to center
-                    ball->position = Vec3(0.0f, 0.11f, 0.0f);
-                    ball->velocity = Vec3(0.0f, 0.0f, 0.0f);
-                    ball->angular_velocity = Vec3(0.0f, 0.0f, 0.0f);
+                // Limit ball max speed to prevent runaway
+                float ball_speed = Vec3::length(ball->velocity);
+                static constexpr float MAX_BALL_SPEED = 35.0f; // ~126 km/h
+                if (ball_speed > MAX_BALL_SPEED) {
+                    float scale = MAX_BALL_SPEED / ball_speed;
+                    ball->velocity.x *= scale;
+                    ball->velocity.y *= scale;
+                    ball->velocity.z *= scale;
                 }
+            }
+        }
+
+        // --- Update possession timer ---
+        if (possession_timer > 0.0f) {
+            possession_timer -= game_loop_dt;
+            if (possession_timer <= 0.0f) {
+                possession_timer = 0.0f;
+                ball->possession_team = TEAM_NONE;
             }
         }
     }
@@ -416,15 +493,40 @@ struct SceneState {
     // =========================================================================
     // update — Main per-frame update (driven by Application::tick)
     // =========================================================================
+    float game_loop_dt = 0.0f; // Set by Application::tick() before calling update()
+
     void update(float dt)
     {
         if (!is_loaded) return;
-        // NOTE: The Application's GameLoop gates physics stepping via
-        // should_step_physics(). SceneState does not maintain its own
-        // play/pause state — it is driven externally.
+        game_loop_dt = dt;
 
         // Step kinematics: motor intent -> velocity -> position
         entity_manager.update_all(dt);
+
+        // --- Clamp athletes to field boundary (with small margin) ---
+        float half_field = config.field_length * 0.5f;
+        float half_width = config.field_width * 0.5f;
+        float margin = 2.0f;
+        for (uint32_t i = 0u; i < entity_manager.athlete_count; ++i) {
+            AthleteEntity& a = entity_manager.athletes[i];
+            if (!a.id.is_valid() || !a.is_active) continue;
+            if (a.position.x < -(half_field + margin)) {
+                a.position.x = -(half_field + margin);
+                a.velocity.x = 0.0f;
+            }
+            if (a.position.x > (half_field + margin)) {
+                a.position.x = (half_field + margin);
+                a.velocity.x = 0.0f;
+            }
+            if (a.position.z < -(half_width + margin)) {
+                a.position.z = -(half_width + margin);
+                a.velocity.z = 0.0f;
+            }
+            if (a.position.z > (half_width + margin)) {
+                a.position.z = (half_width + margin);
+                a.velocity.z = 0.0f;
+            }
+        }
 
         // Update match time
         match_time_seconds += dt;
