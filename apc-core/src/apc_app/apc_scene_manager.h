@@ -329,9 +329,9 @@ struct SceneState {
         // --- Out of bounds check ---
         if (ball_in_play) {
             bool oob = false;
-            if (ball->position.x < -(half_field + 2.0f) || ball->position.x > (half_field + 2.0f)) {
+            if (ball->position.x < -(half_field + 0.5f) || ball->position.x > (half_field + 0.5f)) {
                 oob = true; // Beyond goal line (not in goal)
-            } else if (ball->position.z < -(half_width + 1.0f) || ball->position.z > (half_width + 1.0f)) {
+            } else if (ball->position.z < -(half_width + 0.5f) || ball->position.z > (half_width + 0.5f)) {
                 oob = true; // Beyond touchline
             }
             // Check if actually IN goal (within goal posts)
@@ -372,10 +372,10 @@ struct SceneState {
                 float bx = ball->position.x;
                 float bz = ball->position.z;
                 // Clamp to field boundary
-                if (bx < -(half_field + 1.0f)) bx = -(half_field + 0.5f);
-                else if (bx > (half_field + 1.0f)) bx = half_field + 0.5f;
-                if (bz < -(half_width + 1.0f)) bz = -(half_width + 0.5f);
-                else if (bz > (half_width + 1.0f)) bz = half_width + 0.5f;
+                if (bx < -(half_field + 0.5f)) bx = -(half_field + 0.1f);
+                else if (bx > (half_field + 0.5f)) bx = half_field + 0.1f;
+                if (bz < -(half_width + 0.5f)) bz = -(half_width + 0.1f);
+                else if (bz > (half_width + 0.5f)) bz = half_width + 0.1f;
                 // If beyond goal line, reset to center instead
                 if (std::abs(bx) > half_field) {
                     bx = 0.0f; bz = 0.0f;
