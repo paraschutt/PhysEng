@@ -40,24 +40,62 @@ target_include_directories(apc_core
 )
 
 # ---------------------------------------------------------
-# Application Executable
+# Application Executable (headless)
 # ---------------------------------------------------------
-add_executable(apc_application
-    src/apc_app/main.cpp
-)
-target_link_libraries(apc_application PRIVATE apc_core)
-apc_set_deterministic_flags(apc_application)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/apc_app/main.cpp")
+    add_executable(apc_application
+        src/apc_app/main.cpp
+    )
+    target_link_libraries(apc_application PRIVATE apc_core)
+    apc_set_deterministic_flags(apc_application)
+endif()
 
 # ---------------------------------------------------------
-# SDL2 Windowed Application (Phase 8)
+# SDL2 Visualizer (Optional — only if SDL2 is found)
+# ---------------------------------------------------------
+# Works on:
+#   Windows: vcpkg install sdl2:x64-windows  (or MSYS2 pacman -S mingw-w64-x86_64-SDL2)
+#   Linux:   apt-get install libsdl2-dev       (or use third_party/sdl2)
+#   macOS:   brew install sdl2
+#
+# Usage:
+#   cmake -B build -DCMAKE_TOOLCHAIN_FILE=[vcpkg]/scripts/buildsystems/vcpkg.cmake
+#   cmake --build build --target apc_sdl2_application
 # ---------------------------------------------------------
 
-# Find SDL2 — try system package first, fall back to bundled third_party
-find_package(SDL2 QUIET)
+message(STATUS "")
+message(STATUS "=== SDL2 Visualizer Setup ===")
 
+# Try find_package first (works with vcpkg, system installs, MSYS2)
+# SDL2 provides both a Config and Module find; we prefer Config for vcpkg compat.
+find_package(SDL2 QUIET CONFIG)
 if(NOT SDL2_FOUND)
-    message(STATUS "SDL2 not found via find_package, using bundled third_party")
-    set(SDL2_FOUND 1)
+    find_package(SDL2 QUIET MODULE)
+endif()
+
+# Manual SDL2_DIR hint support (user sets -DSDL2_DIR=...)
+if(NOT SDL2_FOUND AND DEFINED SDL2_DIR)
+    find_package(SDL2 QUIET CONFIG PATHS ${SDL2_DIR} NO_DEFAULT_PATH)
+    if(NOT SDL2_FOUND)
+        find_package(SDL2 QUIET MODULE PATHS ${SDL2_DIR} NO_DEFAULT_PATH)
+    endif()
+endif()
+
+# Linux fallback: try pkg-config
+if(NOT SDL2_FOUND AND NOT WIN32)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(SDL2_PC QUIET sdl2)
+        if(SDL2_PC_FOUND)
+            set(SDL2_FOUND TRUE)
+            message(STATUS "SDL2 found via pkg-config: ${SDL2_PC_LIBRARIES}")
+        endif()
+    endif()
+endif()
+
+# Linux fallback: try third_party/sdl2 extraction
+if(NOT SDL2_FOUND AND NOT WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sdl2")
+    set(SDL2_FOUND TRUE)
 
     # Locate the extracted third-party SDL2 dev package
     set(_SDL2_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sdl2/usr")
@@ -86,46 +124,110 @@ if(NOT SDL2_FOUND)
         message(WARNING "SDL2 third_party package not found. "
                         "Run: apt-get download libsdl2-dev && dpkg-deb -x libsdl2-dev*.deb third_party/sdl2/")
         set(SDL2_FOUND 0)
+    else()
+        message(STATUS "SDL2 found via third_party/sdl2")
     endif()
 endif()
 
 if(SDL2_FOUND)
-    message(STATUS "SDL2 include: ${SDL2_INCLUDE_DIRS}")
-    message(STATUS "SDL2 libraries: ${SDL2_LIBRARIES}")
+    message(STATUS "SDL2 found — building apc_sdl2_application target")
 
-    add_executable(apc_sdl2_application
-        src/apc_app/sdl2_main.cpp
-    )
-    target_link_libraries(apc_sdl2_application PRIVATE apc_core ${SDL2_LIBRARIES})
-    target_include_directories(apc_sdl2_application PRIVATE ${SDL2_INCLUDE_DIRS})
-    if(SDL2_LIBRARY_DIRS)
-        target_link_directories(apc_sdl2_application PRIVATE ${SDL2_LIBRARY_DIRS})
-    endif()
-
-    # Also link against system SDL2 shared library for runtime
-    # The static libSDL2.a requires too many system deps (wayland, X11, etc.)
-    # Find by soname since the .so symlink may not exist
-    find_library(SDL2_RUNTIME_LIB SDL2-2.0 PATHS /lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu NO_DEFAULT_PATH)
-    if(SDL2_RUNTIME_LIB)
-        message(STATUS "SDL2 runtime lib: ${SDL2_RUNTIME_LIB}")
-        target_link_libraries(apc_sdl2_application PRIVATE ${SDL2_RUNTIME_LIB})
+    # Prefer the new src/apc_sdl2 source; fall back to src/apc_app/sdl2_main.cpp
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/apc_sdl2/apc_sdl2_application.cpp")
+        set(_SDL2_SRC src/apc_sdl2/apc_sdl2_application.cpp)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/apc_app/sdl2_main.cpp")
+        set(_SDL2_SRC src/apc_app/sdl2_main.cpp)
     else()
-        # Fallback: try direct path
-        if(EXISTS "/lib/x86_64-linux-gnu/libSDL2-2.0.so.0")
-            target_link_libraries(apc_sdl2_application PRIVATE "/lib/x86_64-linux-gnu/libSDL2-2.0.so.0")
-            message(STATUS "SDL2 runtime lib: /lib/x86_64-linux-gnu/libSDL2-2.0.so.0 (direct)")
+        message(WARNING "SDL2 source file not found — skipping apc_sdl2_application")
+        set(SDL2_FOUND 0)
+    endif()
+endif()
+
+if(SDL2_FOUND)
+    add_executable(apc_sdl2_application ${_SDL2_SRC})
+
+    # Core engine dependency
+    target_link_libraries(apc_sdl2_application PRIVATE apc_core)
+
+    # C++17 required
+    target_compile_features(apc_sdl2_application PRIVATE cxx_std_17)
+
+    # SDL2 linking — handle different find_package results
+    if(TARGET SDL2::SDL2)
+        # Modern CMake target (vcpkg, newer system installs)
+        target_link_libraries(apc_sdl2_application PRIVATE SDL2::SDL2)
+        if(TARGET SDL2::SDL2main)
+            target_link_libraries(apc_sdl2_application PRIVATE SDL2::SDL2main)
+        endif()
+    elseif(SDL2_PC_FOUND)
+        # pkg-config path (Linux)
+        target_include_directories(apc_sdl2_application PRIVATE ${SDL2_PC_INCLUDE_DIRS})
+        target_link_libraries(apc_sdl2_application PRIVATE ${SDL2_PC_LIBRARIES})
+        target_link_directories(apc_sdl2_application PRIVATE ${SDL2_PC_LIBRARY_DIRS})
+    elseif(DEFINED SDL2_INCLUDE_DIRS AND DEFINED SDL2_LIBRARIES)
+        # Module find or third_party path
+        target_include_directories(apc_sdl2_application PRIVATE ${SDL2_INCLUDE_DIRS})
+        target_link_libraries(apc_sdl2_application PRIVATE ${SDL2_LIBRARIES})
+        if(DEFINED SDL2_MAIN_LIBRARIES)
+            target_link_libraries(apc_sdl2_application PRIVATE ${SDL2_MAIN_LIBRARIES})
+        endif()
+        if(SDL2_LIBRARY_DIRS)
+            target_link_directories(apc_sdl2_application PRIVATE ${SDL2_LIBRARY_DIRS})
+        endif()
+
+        # Also link against system SDL2 shared library for runtime
+        # (static libSDL2.a requires too many system deps — wayland, X11, etc.)
+        if(NOT WIN32)
+            find_library(SDL2_RUNTIME_LIB SDL2-2.0 PATHS /lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu NO_DEFAULT_PATH)
+            if(SDL2_RUNTIME_LIB)
+                message(STATUS "SDL2 runtime lib: ${SDL2_RUNTIME_LIB}")
+                target_link_libraries(apc_sdl2_application PRIVATE ${SDL2_RUNTIME_LIB})
+            elseif(EXISTS "/lib/x86_64-linux-gnu/libSDL2-2.0.so.0")
+                target_link_libraries(apc_sdl2_application PRIVATE "/lib/x86_64-linux-gnu/libSDL2-2.0.so.0")
+                message(STATUS "SDL2 runtime lib: /lib/x86_64-linux-gnu/libSDL2-2.0.so.0 (direct)")
+            endif()
         endif()
     endif()
 
-    # Use C++17
-    target_compile_features(apc_sdl2_application PUBLIC cxx_std_17)
+    # Platform-specific libraries
+    if(WIN32)
+        target_link_libraries(apc_sdl2_application PRIVATE opengl32 glu32)
+    elseif(APPLE)
+        find_library(OPENGL_FRAMEWORK OpenGL REQUIRED)
+        target_link_libraries(apc_sdl2_application PRIVATE ${OPENGL_FRAMEWORK})
+    else()
+        # SDL2 needs threads, dl, and GL on Linux
+        find_package(Threads REQUIRED)
+        target_link_libraries(apc_sdl2_application PRIVATE Threads::Threads GL dl)
+    endif()
 
-    # SDL2 needs threads and dl on Linux
-    find_package(Threads REQUIRED)
-    target_link_libraries(apc_sdl2_application PRIVATE Threads::Threads dl)
+    # Warnings but don't error the visualizer (it's not in the deterministic hot path)
+    if(MSVC)
+        target_compile_options(apc_sdl2_application PRIVATE /W4 /Z7)
+    else()
+        target_compile_options(apc_sdl2_application PRIVATE -Wall -Wextra -g)
+    endif()
+
+    message(STATUS "SDL2 visualizer target: apc_sdl2_application")
 else()
-    message(WARNING "SDL2 not available — apc_sdl2_application target will not be built")
+    message(WARNING "SDL2 not found — apc_sdl2_application target will NOT be built")
+    message(STATUS "")
+    message(STATUS "To enable SDL2 on Windows:")
+    message(STATUS "  1. Install vcpkg:  git clone https://github.com/microsoft/vcpkg && cd vcpkg && bootstrap-vcpkg.bat")
+    message(STATUS "  2. Install SDL2:  vcpkg install sdl2:x64-windows")
+    message(STATUS "  3. Configure:    cmake -B build -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake")
+    message(STATUS "  OR with MSYS2:")
+    message(STATUS "  1. pacman -S mingw-w64-x86_64-SDL2")
+    message(STATUS "  2. cmake -B build -G \"MinGW Makefiles\"")
+    message(STATUS "")
+    message(STATUS "To enable SDL2 on Linux:")
+    message(STATUS "  sudo apt-get install libsdl2-dev")
+    message(STATUS "  cmake -B build && cmake --build build --target apc_sdl2_application")
+    message(STATUS "")
 endif()
+
+message(STATUS "=== End SDL2 Setup ===")
+message(STATUS "")
 
 # ---------------------------------------------------------
 # Tests
