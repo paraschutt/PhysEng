@@ -227,7 +227,7 @@ struct EntityManager {
     // Update
     // =========================================================================
 
-    // --- Per-frame update: cooldowns, stamina regen, friction ---
+    // --- Per-frame update: cooldowns, stamina regen, kinematics ---
     void update_all(float dt)
     {
         // --- Update athletes ---
@@ -238,23 +238,62 @@ struct EntityManager {
             // Update cooldowns
             a.update_cooldowns(dt);
 
+            // --- Apply MotorIntent to kinematics ---
+            apply_motor_intent(a, dt);
+
+            // --- Integrate velocity -> position ---
+            a.position.x += a.velocity.x * dt;
+            a.position.y += a.velocity.y * dt;
+            a.position.z += a.velocity.z * dt;
+
+            // --- Ground clamp (Y = 0, keep on field) ---
+            if (a.position.y < 0.0f) {
+                a.position.y = 0.0f;
+                a.velocity.y = 0.0f;
+            }
+
+            // --- Velocity damping (ground friction) ---
+            float friction = 3.0f * dt;
+            if (friction > 0.95f) friction = 0.95f;
+            float speed_xz = std::sqrt(a.velocity.x * a.velocity.x +
+                                        a.velocity.z * a.velocity.z);
+            // Only apply friction when there's no active locomotion intent
+            if (!a.current_intent.has_locomotion() && speed_xz > APC_EPSILON) {
+                float new_speed = speed_xz * (1.0f - friction);
+                if (new_speed < 0.0f) new_speed = 0.0f;
+                float scale = new_speed / speed_xz;
+                a.velocity.x *= scale;
+                a.velocity.z *= scale;
+            }
+
+            // Stamina drain from sprinting
+            if (a.current_intent.sprint_intensity > APC_EPSILON) {
+                a.apply_stamina_drain(0.15f * a.current_intent.sprint_intensity, dt);
+                if (a.stamina <= 0.01f) {
+                    a.current_intent.sprint_intensity = 0.0f;
+                    a.current_intent.action_type = ACTION_MOVE;
+                }
+            }
+
             // Stamina regen (when not sprinting)
-            if (a.stamina < a.max_stamina) {
-                a.stamina += 0.05f * dt; // Regen rate
+            if (a.stamina < a.max_stamina && a.current_intent.sprint_intensity < APC_EPSILON) {
+                a.stamina += 0.08f * dt; // Regen rate
                 if (a.stamina > a.max_stamina) {
                     a.stamina = a.max_stamina;
                 }
             }
         }
 
-        // --- Update balls ---
+        // --- Update balls (full physics: gravity, friction, drag) ---
         for (uint32_t i = 0u; i < ball_count; ++i) {
             BallEntity& b = balls[i];
             if (!b.id.is_valid()) continue;
 
-            // Simple ground friction
-            if (b.velocity.y < APC_EPSILON && b.position.y <= b.radius + APC_EPSILON) {
-                // On ground: apply friction
+            // Integrate ball physics (gravity + bounce + position)
+            integrate_ball_physics(b, dt);
+
+            // On ground: apply rolling friction
+            if (b.position.y <= b.radius + APC_EPSILON) {
                 float friction = b.ground_friction * dt;
                 if (friction > 1.0f) friction = 1.0f;
                 float speed_xz = std::sqrt(b.velocity.x * b.velocity.x +
@@ -288,6 +327,98 @@ private:
         h = h * 31u + static_cast<uint32_t>(jersey);
         h = h * 31u + index;
         return h;
+    }
+
+    // --- Apply MotorIntent to athlete velocity (acceleration model) ---
+    // Converts desired move_direction + move_speed into actual velocity.
+    // Uses a spring-damper approach: accelerate toward desired velocity,
+    // clamped by max run speed, with sprint modifier.
+    static void apply_motor_intent(AthleteEntity& a, float dt)
+    {
+        (void)dt;
+
+        const MotorIntent& intent = a.current_intent;
+        float dir_mag = Vec3::length(intent.move_direction);
+
+        // Max speeds (m/s)
+        float max_walk  = 3.0f;
+        float max_run   = 7.0f;
+        float max_sprint = 10.0f;
+
+        // Determine target speed from intent
+        float target_speed = 0.0f;
+        if (dir_mag > APC_EPSILON) {
+            if (intent.sprint_intensity > APC_EPSILON && a.stamina > 0.01f) {
+                target_speed = max_run + (max_sprint - max_run) * intent.sprint_intensity;
+            } else if (intent.move_speed > APC_EPSILON) {
+                target_speed = max_walk + (max_run - max_walk) * intent.move_speed;
+            } else {
+                target_speed = max_walk * intent.move_speed;
+            }
+        }
+
+        // Target velocity in XZ plane
+        Vec3 target_vel(0.0f, 0.0f, 0.0f);
+        if (dir_mag > APC_EPSILON) {
+            target_vel = Vec3::scale(intent.move_direction, target_speed);
+        }
+
+        // Smooth acceleration (spring-like: 12.0 = responsiveness)
+        float accel_rate = 12.0f;
+        if (dir_mag < APC_EPSILON) {
+            // Decelerate when no input
+            accel_rate = 8.0f;
+        }
+
+        // Lerp current velocity toward target
+        a.velocity.x += (target_vel.x - a.velocity.x) * accel_rate * (1.0f / 240.0f);
+        a.velocity.z += (target_vel.z - a.velocity.z) * accel_rate * (1.0f / 240.0f);
+        // Keep Y velocity from intent (for jumps)
+        a.velocity.y += intent.jump_impulse.y * (1.0f / 240.0f);
+
+        // Clamp horizontal speed
+        float horiz_speed = std::sqrt(a.velocity.x * a.velocity.x + a.velocity.z * a.velocity.z);
+        if (horiz_speed > max_sprint) {
+            float clamp = max_sprint / horiz_speed;
+            a.velocity.x *= clamp;
+            a.velocity.z *= clamp;
+        }
+
+        // Update orientation to face move direction
+        if (dir_mag > APC_EPSILON) {
+            Vec3 look = intent.look_direction;
+            float look_mag = Vec3::length(look);
+            if (look_mag > APC_EPSILON) {
+                look = Vec3::scale(look, 1.0f / look_mag);
+            } else {
+                look = Vec3::scale(intent.move_direction, 1.0f / dir_mag);
+            }
+            // Y-axis rotation from direction
+            float angle = std::atan2(look.x, look.z);
+            a.orientation = Quat::from_axis_angle(Vec3(0.0f, 1.0f, 0.0f), angle);
+        }
+    }
+
+    // --- Apply ball physics: gravity + ground bounce ---
+    static void integrate_ball_physics(BallEntity& b, float dt)
+    {
+        // Gravity
+        b.velocity.y -= 9.81f * dt;
+
+        // Integrate position
+        b.position.x += b.velocity.x * dt;
+        b.position.y += b.velocity.y * dt;
+        b.position.z += b.velocity.z * dt;
+
+        // Ground bounce
+        if (b.position.y < b.radius) {
+            b.position.y = b.radius;
+            b.velocity.y = -b.velocity.y * b.bounce_restitution;
+            // Kill tiny bounces
+            if (b.velocity.y < 0.3f) {
+                b.velocity.y = 0.0f;
+            }
+        }
     }
 };
 

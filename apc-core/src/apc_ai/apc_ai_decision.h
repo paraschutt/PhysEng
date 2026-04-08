@@ -185,23 +185,96 @@ struct UtilityAI {
     // =========================================================================
     // get_action_score — Compute utility score for a specific action
     // =========================================================================
-    float get_action_score(AIActionType /*action*/, const float* inputs,
+    // Context inputs: [0]=dist_ball, [1]=dist_goal, [2]=dist_opponent,
+    //                 [3]=stamina, [4]=team_possession, [5]=time_remaining,
+    //                 [6]=score_diff, [7]=position_quality
+    // =========================================================================
+    float get_action_score(AIActionType action, const float* inputs,
                             uint32_t input_count) const
     {
         if (consideration_count == 0u || inputs == nullptr) {
             return 0.0f;
         }
 
-        (void)input_count; // Used via eval_count below
+        float dist_ball  = (input_count > 0) ? inputs[0] : 50.0f;
+        float dist_goal  = (input_count > 1) ? inputs[1] : 60.0f;
+        float stamina    = (input_count > 3) ? inputs[3] : 1.0f;
+        float possession = (input_count > 4) ? inputs[4] : 0.0f;
+
         float result = 1.0f;
+
+        // --- Action-specific scoring ---
+        switch (action) {
+        case AIActionType::CHASE_BALL:
+            // Higher score when closer to ball and has stamina
+            result *= 1.0f - std::min(dist_ball / 50.0f, 1.0f); // Closer = better
+            result *= (0.5f + 0.5f * stamina);
+            result *= (0.4f + 0.6f * possession); // More aggressive with ball
+            break;
+
+        case AIActionType::SHOOT_BALL:
+            // Only makes sense when very close to ball AND close to goal
+            result *= (dist_ball < 5.0f) ? (1.0f - dist_ball / 5.0f) : 0.0f;
+            result *= (dist_goal < 30.0f) ? (1.0f - dist_goal / 30.0f) : 0.1f;
+            result *= stamina;
+            break;
+
+        case AIActionType::MOVE_TO_POSITION:
+            // Default: always decent, higher when far from ball
+            result *= std::min(dist_ball / 40.0f, 1.0f); // Further = more likely
+            result *= 0.6f; // Moderate base score
+            break;
+
+        case AIActionType::SUPPORT_RUN:
+            // Good when team has possession and not too far from ball
+            result *= (0.3f + 0.7f * possession);
+            result *= (dist_ball < 25.0f) ? 0.8f : 0.4f;
+            result *= stamina;
+            break;
+
+        case AIActionType::PRESS:
+            // High when close to ball and opponent likely has it
+            result *= (dist_ball < 15.0f) ? (1.0f - dist_ball / 15.0f) : 0.05f;
+            result *= (1.0f - possession); // Press more when NOT in possession
+            result *= (0.5f + 0.5f * stamina);
+            break;
+
+        case AIActionType::INTERCEPT:
+            // Good when ball is nearby and moving fast (not implemented yet, use proximity)
+            result *= (dist_ball < 10.0f) ? (1.0f - dist_ball / 10.0f) : 0.05f;
+            result *= (1.0f - 0.5f * possession); // Intercept when opponent has ball
+            break;
+
+        case AIActionType::TACKLE:
+            // Only when very close to ball and stamina is high
+            result *= (dist_ball < 3.0f) ? (1.0f - dist_ball / 3.0f) : 0.0f;
+            result *= (stamina > 0.3f) ? stamina : 0.0f;
+            break;
+
+        case AIActionType::PASS_BALL:
+            // When has ball and teammate nearby (simplified)
+            result *= (dist_ball < 2.0f) ? 0.8f : 0.0f;
+            result *= possession;
+            result *= stamina;
+            break;
+
+        case AIActionType::FORMATION_HOLD:
+        default:
+            // Fallback: always reasonable
+            result = 0.3f;
+            // Higher when far from ball (just hold position)
+            result *= std::min(dist_ball / 30.0f, 1.0f);
+            break;
+        }
+
+        // Also apply consideration-based modulation
         uint32_t eval_count = (input_count < consideration_count)
                               ? input_count : consideration_count;
-
         for (uint32_t i = 0u; i < eval_count; ++i) {
             float score = considerations[i].evaluate(inputs[i]);
-            // Apply weight
             score *= considerations[i].weight;
-            result *= score;
+            // Blend consideration into result (don't multiply raw, which kills score)
+            result = result * 0.7f + score * 0.3f;
         }
 
         return result;

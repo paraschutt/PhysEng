@@ -257,6 +257,27 @@ struct SceneState {
         utility_ai[0].configure_role(SportRole::SOCCER_CM);
         utility_ai[1].configure_role(SportRole::SOCCER_CM);
 
+        // Register available actions for utility evaluation
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::FORMATION_HOLD;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::CHASE_BALL;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::SHOOT_BALL;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::MOVE_TO_POSITION;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::SUPPORT_RUN;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::PRESS;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::INTERCEPT;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::TACKLE;
+        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::PASS_BALL;
+
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::FORMATION_HOLD;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::CHASE_BALL;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::SHOOT_BALL;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::MOVE_TO_POSITION;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::SUPPORT_RUN;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::PRESS;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::INTERCEPT;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::TACKLE;
+        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::PASS_BALL;
+
         // Add default considerations
         utility_ai[0].add_consideration("dist_ball", 1.5f, ResponseCurve::QUADRATIC, 0.0f, 50.0f);
         utility_ai[0].add_consideration("dist_goal", 1.2f, ResponseCurve::EXPONENTIAL, 0.0f, 60.0f);
@@ -267,28 +288,141 @@ struct SceneState {
     }
 
     // =========================================================================
-    // update — Main per-frame update
+    // process_ball_interaction — Check proximity, apply kicks/touches
+    // =========================================================================
+    void process_ball_interaction()
+    {
+        if (!is_loaded) return;
+
+        BallEntity* ball = entity_manager.find_ball();
+        if (!ball) return;
+
+        float half_field = config.field_length * 0.5f;
+
+        for (uint32_t i = 0u; i < entity_manager.athlete_count; ++i) {
+            AthleteEntity& a = entity_manager.athletes[i];
+            if (!a.id.is_valid() || !a.is_active) continue;
+
+            // Distance from athlete to ball (XZ plane + Y)
+            Vec3 diff = Vec3::sub(ball->position, a.position);
+            float dist_xz = std::sqrt(diff.x * diff.x + diff.z * diff.z);
+            float dist_y = std::abs(diff.y);
+
+            // Interaction range: athlete radius + ball radius + kick reach
+            float kick_range = a.radius + ball->radius + 0.8f;
+            float ground_reach = a.height * 0.6f; // Can reach up to ~60% of height
+
+            if (dist_xz < kick_range && dist_y < ground_reach) {
+                // --- Athlete is close enough to interact with ball ---
+
+                // Get AI action from stored flags
+                AIActionType action = static_cast<AIActionType>(a.flags & 0xFFu);
+
+                // Direction from athlete to ball
+                Vec3 to_ball = diff;
+                to_ball.y = 0.0f;
+                float to_ball_len = Vec3::length(to_ball);
+                if (to_ball_len < APC_EPSILON) continue;
+
+                Vec3 to_ball_dir = Vec3::scale(to_ball, 1.0f / to_ball_len);
+
+                // Kick force varies by action
+                float kick_force = 0.0f;
+
+                if (action == AIActionType::SHOOT_BALL) {
+                    // Shoot: hard kick toward opponent goal
+                    float goal_x = (a.team == TEAM_HOME) ? half_field : -half_field;
+                    Vec3 to_goal(goal_x - ball->position.x, 0.0f,
+                                 0.0f - ball->position.z);
+                    float goal_dist = Vec3::length(to_goal);
+                    if (goal_dist > APC_EPSILON) {
+                        kick_force = 20.0f; // Strong shot
+                        Vec3 kick_dir = Vec3::scale(to_goal, 1.0f / goal_dist);
+                        ball->velocity.x += kick_dir.x * kick_force;
+                        ball->velocity.y += 2.0f; // Slight lift
+                        ball->velocity.z += kick_dir.z * kick_force;
+                    }
+                    ball->last_toucher = a.id;
+                    ball->possession_team = a.team;
+
+                } else if (action == AIActionType::CHASE_BALL ||
+                           action == AIActionType::PRESS ||
+                           action == AIActionType::INTERCEPT) {
+                    // Dribble: gentle touch in movement direction
+                    Vec3 move_dir = a.current_intent.move_direction;
+                    float move_mag = Vec3::length(move_dir);
+                    if (move_mag > APC_EPSILON) {
+                        kick_force = 5.0f; // Gentle touch
+                        Vec3 kick_dir = Vec3::scale(move_dir, 1.0f / move_mag);
+                        ball->velocity.x += kick_dir.x * kick_force;
+                        ball->velocity.z += kick_dir.z * kick_force;
+                    } else {
+                        // Just nudge ball forward
+                        kick_force = 3.0f;
+                        ball->velocity.x += to_ball_dir.x * kick_force;
+                        ball->velocity.z += to_ball_dir.z * kick_force;
+                    }
+                    ball->last_toucher = a.id;
+                    ball->possession_team = a.team;
+
+                } else if (action == AIActionType::SUPPORT_RUN ||
+                           action == AIActionType::MOVE_TO_POSITION) {
+                    // Light touch when passing through
+                    if (to_ball_len < a.radius + ball->radius + 0.3f) {
+                        kick_force = 2.0f;
+                        ball->velocity.x += to_ball_dir.x * kick_force;
+                        ball->velocity.z += to_ball_dir.z * kick_force;
+                        ball->last_toucher = a.id;
+                        ball->possession_team = a.team;
+                    }
+                }
+
+                // Check for goal: ball past goal line
+                if (ball->position.x > half_field + 1.0f) {
+                    // Away team scores (or home concedes)
+                    if (a.team == TEAM_AWAY) {
+                        ++away_score;
+                    }
+                    // Reset ball to center
+                    ball->position = Vec3(0.0f, 0.11f, 0.0f);
+                    ball->velocity = Vec3(0.0f, 0.0f, 0.0f);
+                    ball->angular_velocity = Vec3(0.0f, 0.0f, 0.0f);
+                } else if (ball->position.x < -(half_field + 1.0f)) {
+                    // Home team scores (or away concedes)
+                    if (a.team == TEAM_HOME) {
+                        ++home_score;
+                    }
+                    // Reset ball to center
+                    ball->position = Vec3(0.0f, 0.11f, 0.0f);
+                    ball->velocity = Vec3(0.0f, 0.0f, 0.0f);
+                    ball->angular_velocity = Vec3(0.0f, 0.0f, 0.0f);
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // update — Main per-frame update (driven by Application::tick)
     // =========================================================================
     void update(float dt)
     {
         if (!is_loaded) return;
-        if (game_loop.state != GameState::PLAYING) return;
+        // NOTE: The Application's GameLoop gates physics stepping via
+        // should_step_physics(). SceneState does not maintain its own
+        // play/pause state — it is driven externally.
 
-        // Step AI decision -> steering -> motor intent -> entity update
+        // Step kinematics: motor intent -> velocity -> position
         entity_manager.update_all(dt);
 
         // Update match time
         match_time_seconds += dt;
 
-        // Check half time
+        // Check half time (uses match config directly)
         if (config.halves > 0 && config.half_duration > 0.0f) {
             float current_half = match_time_seconds / config.half_duration;
             uint32_t half_index = static_cast<uint32_t>(current_half);
             if (half_index > 0 && half_index >= config.halves) {
-                game_loop.state = GameState::FULL_TIME;
-            } else if (half_index > 0 && current_half - static_cast<float>(half_index) < 0.001f) {
-                // Near half-time boundary
-                game_loop.state = GameState::HALF_TIME;
+                // Full time reached
             }
         }
     }

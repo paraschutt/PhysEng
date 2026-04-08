@@ -186,7 +186,7 @@ struct Application {
     }
 
     // =========================================================================
-    // tick — Main update: physics step -> AI -> entities -> debug viz
+    // tick — Main update: AI decision -> steering -> motor intent -> physics -> ball
     // =========================================================================
     void tick()
     {
@@ -194,50 +194,226 @@ struct Application {
 
         // --- Physics step loop ---
         while (game_loop.should_step_physics()) {
-            // Convert human input to motor intents
+            float phys_dt = game_loop.time.fixed_delta;
+
+            // --- 1. Convert human input to motor intents ---
             for (uint32_t p = 0u; p < 4u; ++p) {
-                // Find human-controlled athletes for this player
                 for (uint32_t i = 0u; i < scene.entity_manager.athlete_count; ++i) {
                     AthleteEntity& a = scene.entity_manager.athletes[i];
                     if (!a.id.is_valid()) continue;
                     if (!a.is_human_controlled) continue;
-                    // Assign first human-controlled entity to first player slot
                     a.current_intent = input_converter.convert(
                         input_states[p],
-                        Vec3(0.0f, 0.0f, -1.0f), // Default camera forward
+                        Vec3(0.0f, 0.0f, -1.0f),
                         a.position);
                     break;
                 }
             }
 
-            // Step physics
+            // --- 2. Step physics counter ---
             game_loop.step_physics();
 
-            // Step scene (entities, timers)
-            scene.update(game_loop.time.fixed_delta);
+            // --- 3. AI Decision + Steering Pipeline for all AI athletes ---
+            const BallEntity* ball = scene.entity_manager.find_ball();
+            Vec3 ball_pos = ball ? ball->position : Vec3(0.0f, 0.0f, 0.0f);
+            float half_field = scene.config.field_length * 0.5f;
 
-            // Step AI controllers
+            // Pre-compute team athlete indices for team counts
+            uint32_t home_player_idx = 0u;
+            uint32_t away_player_idx = 0u;
+
             for (uint32_t i = 0u; i < scene.entity_manager.athlete_count; ++i) {
                 AthleteEntity& a = scene.entity_manager.athletes[i];
-                if (!a.id.is_valid()) continue;
-                if (a.is_human_controlled) continue;
+                if (!a.id.is_valid() || a.is_human_controlled) continue;
                 if (i >= MAX_AI_CONTROLLERS) continue;
 
-                // Get steering from a simple seek behavior toward formation target
-                SteeringOutput steering = SteeringSystem::seek(
-                    a.position,
-                    a.current_intent.move_direction,
-                    scene.config.field_length * 0.01f * a.current_intent.move_speed);
+                // --- 3a. Compute context factors for Utility AI ---
+                float dist_to_ball = Vec3::length(Vec3::sub(a.position, ball_pos));
 
-                // Convert steering to motor intent via AI controller
+                // Distance to own goal (defend) and opponent goal (attack)
+                float own_goal_x = (a.team == TEAM_HOME) ? -half_field : half_field;
+                float opp_goal_x = (a.team == TEAM_HOME) ?  half_field : -half_field;
+                float dist_opp_goal = std::abs(a.position.x - opp_goal_x);
+
+                // Possession heuristic: is this team's player closest to ball?
+                float closest_own_dist = dist_to_ball;
+                for (uint32_t j = 0u; j < scene.entity_manager.athlete_count; ++j) {
+                    if (j == i) continue;
+                    const AthleteEntity& other = scene.entity_manager.athletes[j];
+                    if (!other.id.is_valid()) continue;
+                    if (other.team != a.team) continue;
+                    float other_dist = Vec3::length(Vec3::sub(other.position, ball_pos));
+                    if (other_dist < closest_own_dist) {
+                        closest_own_dist = other_dist;
+                    }
+                }
+                float has_possession = (dist_to_ball <= closest_own_dist) ? 1.0f : 0.0f;
+
+                // Feed context factors to UtilityAI (team 0 = home, team 1 = away)
+                float context_inputs[8] = {
+                    dist_to_ball,           // CONTEXT 0: DISTANCE_TO_BALL
+                    dist_opp_goal,          // CONTEXT 1: DISTANCE_TO_GOAL
+                    0.0f,                   // CONTEXT 2: DISTANCE_TO_OPPONENT (simplified)
+                    a.stamina,              // CONTEXT 3: STAMINA_PERCENT
+                    has_possession,         // CONTEXT 4: TEAM_POSSESSION
+                    1.0f,                   // CONTEXT 5: TIME_REMAINING (always full for now)
+                    0.0f,                   // CONTEXT 6: SCORE_DIFFERENTIAL
+                    0.5f                    // CONTEXT 7: POSITION_QUALITY
+                };
+
+                uint32_t team_idx = (a.team == TEAM_HOME) ? 0u : 1u;
+                UtilityScore decision = scene.utility_ai[team_idx].evaluate(
+                    context_inputs, 8u);
+
+                // --- 3b. Map AIActionType -> steering target ---
+                // Get formation position for this player
+                uint32_t form_idx = (a.team == TEAM_HOME)
+                    ? home_player_idx : away_player_idx;
+
+                // Possession factor: 0.5 when ball is central, 1.0 when own team has it
+                float possession_factor = 0.3f + 0.7f * has_possession;
+
+                Vec3 formation_pos = scene.formation_system.get_formation_position(
+                    static_cast<uint8_t>(form_idx),
+                    ball_pos,
+                    Vec3(own_goal_x, 0.0f, 0.0f),
+                    Vec3(opp_goal_x, 0.0f, 0.0f),
+                    possession_factor);
+
+                // Scale formation position to world space
+                formation_pos.x *= half_field;
+                formation_pos.z *= scene.config.field_width * 0.5f;
+                formation_pos.y = 0.0f;
+
+                // Select steering target based on chosen action
+                Vec3 steer_target = formation_pos; // Default: hold formation
+                float max_speed = scene.ai_controllers[i].steering_config.max_speed;
+                if (max_speed < APC_EPSILON) max_speed = 7.0f;
+                float urgency = 0.2f; // Default low urgency
+
+                switch (decision.action) {
+                case AIActionType::CHASE_BALL:
+                    steer_target = ball_pos;
+                    urgency = 0.9f;
+                    // If very close to ball, steer slightly ahead of it
+                    if (dist_to_ball < 3.0f && ball) {
+                        // Predict where ball is heading
+                        Vec3 predicted = Vec3::add(ball_pos,
+                            Vec3::scale(ball->velocity, 0.3f));
+                        predicted.y = 0.0f;
+                        steer_target = predicted;
+                    }
+                    break;
+
+                case AIActionType::SHOOT_BALL:
+                    // Steer toward ball then kick toward opponent goal
+                    if (dist_to_ball < 2.0f) {
+                        steer_target = Vec3(opp_goal_x, 0.0f, 0.0f);
+                        urgency = 1.0f;
+                    } else {
+                        steer_target = ball_pos;
+                        urgency = 0.85f;
+                    }
+                    break;
+
+                case AIActionType::MOVE_TO_POSITION:
+                    steer_target = formation_pos;
+                    urgency = 0.5f;
+                    break;
+
+                case AIActionType::SUPPORT_RUN:
+                    // Run toward a position between ball and opponent goal
+                    steer_target = Vec3(
+                        (ball_pos.x + opp_goal_x) * 0.5f,
+                        0.0f,
+                        ball_pos.z + ((a.position.z > ball_pos.z) ? 5.0f : -5.0f)
+                    );
+                    urgency = 0.6f;
+                    break;
+
+                case AIActionType::PRESS:
+                    // High urgency: press toward ball aggressively
+                    steer_target = ball_pos;
+                    urgency = 0.95f;
+                    break;
+
+                case AIActionType::INTERCEPT:
+                    // Steer toward ball's predicted position
+                    if (ball) {
+                        float predict_time = dist_to_ball / (max_speed + APC_EPSILON);
+                        if (predict_time > 1.0f) predict_time = 1.0f;
+                        steer_target = Vec3::add(ball_pos,
+                            Vec3::scale(ball->velocity, predict_time));
+                        steer_target.y = 0.0f;
+                    } else {
+                        steer_target = ball_pos;
+                    }
+                    urgency = 0.8f;
+                    break;
+
+                case AIActionType::FORMATION_HOLD:
+                default:
+                    steer_target = formation_pos;
+                    urgency = 0.2f;
+                    break;
+                }
+
+                // --- 3c. Compute composite steering ---
+                // Primary: arrive at target (slows down when close)
+                SteeringOutput primary = SteeringSystem::arrive(
+                    a.position, steer_target, max_speed, 0.5f, 4.0f);
+                primary.urgency = urgency;
+
+                // Secondary: separation from nearby teammates
+                Vec3 neighbors[MAX_NEIGHBOR_COUNT];
+                uint32_t neighbor_count = 0u;
+                for (uint32_t j = 0u; j < scene.entity_manager.athlete_count && neighbor_count < MAX_NEIGHBOR_COUNT; ++j) {
+                    if (j == i) continue;
+                    const AthleteEntity& other = scene.entity_manager.athletes[j];
+                    if (!other.id.is_valid()) continue;
+                    if (other.team != a.team) continue;
+                    float ndist = Vec3::length(Vec3::sub(a.position, other.position));
+                    if (ndist < 3.0f) { // Only care about close teammates
+                        neighbors[neighbor_count++] = other.position;
+                    }
+                }
+                SteeringOutput sep = SteeringSystem::separation(
+                    neighbors, neighbor_count, a.position,
+                    2.0f, 15.0f);
+
+                // Blend primary + separation
+                WeightedSteering blended[2];
+                blended[0].behavior = SteeringBehavior::ARRIVE;
+                blended[0].weight = 1.0f;
+                blended[0].output = primary;
+                blended[1].behavior = SteeringBehavior::SEPARATION;
+                blended[1].weight = 2.5f;
+                blended[1].output = sep;
+
+                SteeringOutput final_steering = SteeringSystem::blend(blended, 2u);
+
+                // --- 3d. Convert steering -> MotorIntent via AI motor controller ---
                 a.current_intent = scene.ai_controllers[i].update(
-                    steering, a.position, a.orientation,
-                    game_loop.time.fixed_delta);
+                    final_steering, a.position, a.orientation, phys_dt);
+
+                // Store chosen action for debug
+                a.flags = static_cast<uint16_t>(
+                    a.flags & 0xFF00u) | static_cast<uint16_t>(decision.action);
+
+                // Increment team player index for formation lookup
+                if (a.team == TEAM_HOME) ++home_player_idx;
+                else ++away_player_idx;
             }
 
-            // --- Collect debug data ---
+            // --- 4. Ball interaction: kick the ball when close ---
+            scene.process_ball_interaction();
+
+            // --- 5. Step scene (entities, kinematics, timers) ---
+            scene.update(phys_dt);
+
+            // --- 6. Collect debug data ---
             if (config.enable_ai_debug) {
-                // Collect steering debug entries
+                ai_debug.begin_frame();
                 for (uint32_t i = 0u; i < scene.entity_manager.athlete_count; ++i) {
                     const AthleteEntity& a = scene.entity_manager.athletes[i];
                     if (!a.id.is_valid()) continue;
@@ -246,32 +422,24 @@ struct Application {
                     se.entity_id = a.id;
                     se.position = a.position;
                     se.steering_force = a.current_intent.move_direction;
-                    se.behavior_count = 0;
+                    se.behavior_count = a.current_intent.action_type;
                     ai_debug.add_steering_entry(se);
 
                     FormationDebugEntry fe;
                     fe.entity_id = a.id;
                     fe.actual_position = a.position;
-                    fe.formation_position = a.position; // Placeholder
+                    fe.formation_position = a.position;
                     fe.ball_influenced_position = a.position;
                     ai_debug.add_formation_entry(fe);
-                }
-
-                // Collect utility debug entries
-                for (uint32_t i = 0u; i < scene.entity_manager.athlete_count; ++i) {
-                    const AthleteEntity& a = scene.entity_manager.athletes[i];
-                    if (!a.id.is_valid()) continue;
 
                     UtilityDebugEntry ue;
                     ue.entity_id = a.id;
-                    ue.chosen_action = static_cast<AIActionType>(0);
+                    ue.chosen_action = static_cast<AIActionType>(a.flags & 0xFFu);
                     ue.confidence = a.stamina;
                     ue.position = a.position;
                     ai_debug.add_utility_entry(ue);
                 }
             }
-
-            // End physics step
         }
 
         // --- Render debug visualization ---

@@ -70,19 +70,35 @@ static void print_match_status(const apc::Application& app, double sim_time,
                     ball_speed, ball->ball_type);
     }
 
-    // Show a few sample athlete positions
+    // Show a few sample athlete positions and actions
     std::printf("  Sample positions:\n");
     uint32_t shown = 0;
-    for (uint32_t i = 0u; i < scene.entity_manager.athlete_count && shown < 4u; ++i) {
+    for (uint32_t i = 0u; i < scene.entity_manager.athlete_count && shown < 6u; ++i) {
         const apc::AthleteEntity& a = scene.entity_manager.athletes[i];
         if (!a.id.is_valid()) continue;
         float speed = apc::Vec3::length(a.velocity);
         const char* team_str = (a.team == apc::TEAM_HOME) ? "H" : "A";
-        std::printf("    [%s#%02u] pos=(%6.1f, %4.1f, %6.1f)  spd=%.1f  intent=%s\n",
+
+        // Decode AI action from flags
+        const char* action_str = "IDLE";
+        apc::AIActionType action = static_cast<apc::AIActionType>(a.flags & 0xFFu);
+        switch (action) {
+        case apc::AIActionType::CHASE_BALL:     action_str = "CHASE"; break;
+        case apc::AIActionType::SHOOT_BALL:     action_str = "SHOOT"; break;
+        case apc::AIActionType::PASS_BALL:      action_str = "PASS";  break;
+        case apc::AIActionType::TACKLE:         action_str = "TACKL"; break;
+        case apc::AIActionType::MOVE_TO_POSITION: action_str = "MOVE"; break;
+        case apc::AIActionType::SUPPORT_RUN:    action_str = "SUPP";  break;
+        case apc::AIActionType::PRESS:          action_str = "PRESS"; break;
+        case apc::AIActionType::INTERCEPT:      action_str = "INTRC"; break;
+        case apc::AIActionType::FORMATION_HOLD: action_str = "FORM";  break;
+        default: break;
+        }
+
+        std::printf("    [%s#%02u] pos=(%6.1f, %4.1f, %6.1f)  spd=%5.1f  AI=%s\n",
                     team_str, a.jersey_number,
                     a.position.x, a.position.y, a.position.z,
-                    speed,
-                    a.current_intent.has_locomotion() ? "MOVE" : "IDLE");
+                    speed, action_str);
         ++shown;
     }
 
