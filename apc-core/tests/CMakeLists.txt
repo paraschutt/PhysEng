@@ -200,3 +200,52 @@ add_test(NAME Sprint19Correctness COMMAND test_sprint19)
 add_executable(test_sprint20 correctness/test_sprint20.cpp)
 target_link_libraries(test_sprint20 PRIVATE apc_core)
 add_test(NAME Sprint20Correctness COMMAND test_sprint20)
+
+# ---------------------------------------------------------
+# Sprint 21 Tests — Input System: Types, State, Mapping
+# ---------------------------------------------------------
+add_executable(test_sprint21 correctness/test_sprint21.cpp)
+target_link_libraries(test_sprint21 PRIVATE apc_core)
+add_test(NAME Sprint21Correctness COMMAND test_sprint21)
+
+# ---------------------------------------------------------
+# Sprint 22 Tests — Entity System: Types, IDs, Manager
+# ---------------------------------------------------------
+add_executable(test_sprint22 correctness/test_sprint22.cpp)
+target_link_libraries(test_sprint22 PRIVATE apc_core)
+add_test(NAME Sprint22Correctness COMMAND test_sprint22)
+
+# ---------------------------------------------------------
+# Sprint 23 Tests — AI Steering Behaviors & Motor Controller
+# ---------------------------------------------------------
+add_executable(test_sprint23 correctness/test_sprint23.cpp)
+target_link_libraries(test_sprint23 PRIVATE apc_core)
+add_test(NAME Sprint23Correctness COMMAND test_sprint23)
+
+# ---------------------------------------------------------
+# Sprint 24 Tests — AI Decision System & Formation System
+# ---------------------------------------------------------
+add_executable(test_sprint24 correctness/test_sprint24.cpp)
+target_link_libraries(test_sprint24 PRIVATE apc_core)
+add_test(NAME Sprint24Correctness COMMAND test_sprint24)
+
+# ---------------------------------------------------------
+# Sprint 25 Tests — AI Debug Visualization
+# ---------------------------------------------------------
+add_executable(test_sprint25 correctness/test_sprint25.cpp)
+target_link_libraries(test_sprint25 PRIVATE apc_core)
+add_test(NAME Sprint25Correctness COMMAND test_sprint25)
+
+# ---------------------------------------------------------
+# Sprint 26 Tests — Game Loop & Scene Manager
+# ---------------------------------------------------------
+add_executable(test_sprint26 correctness/test_sprint26.cpp)
+target_link_libraries(test_sprint26 PRIVATE apc_core)
+add_test(NAME Sprint26Correctness COMMAND test_sprint26)
+
+# ---------------------------------------------------------
+# Sprint 27 Tests — Application Lifecycle
+# ---------------------------------------------------------
+add_executable(test_sprint27 correctness/test_sprint27.cpp)
+target_link_libraries(test_sprint27 PRIVATE apc_core)
+add_test(NAME Sprint27Correctness COMMAND test_sprint27)

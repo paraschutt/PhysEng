@@ -6,7 +6,7 @@
 // Implements a utility-based AI decision system for selecting the best action
 // for an athlete based on game context, positional factors, and response curves.
 //
-//   - ActionType: enumeration of all possible AI actions
+//   - AIActionType: enumeration of all possible AI actions
 //   - ResponseCurve: maps input [0,1] to output [0,1] via power curves
 //   - UtilityScore: result struct with score, action, confidence
 //   - Consideration: single evaluation factor
@@ -37,9 +37,9 @@ static constexpr uint32_t MAX_ACTIONS         = 16;
 static constexpr uint32_t MAX_CONTEXT_FACTORS = 8;
 
 // =============================================================================
-// ActionType — Enumeration of all possible AI actions
+// AIActionType — Enumeration of all possible AI actions
 // =============================================================================
-enum class ActionType : uint8_t {
+enum class AIActionType : uint8_t {
     IDLE            = 0,
     MOVE_TO_POSITION = 1,
     CHASE_BALL      = 2,
@@ -73,7 +73,7 @@ enum class ResponseCurve : uint8_t {
 // =============================================================================
 struct UtilityScore {
     float     score      = 0.0f;
-    ActionType action     = ActionType::IDLE;
+    AIActionType action     = AIActionType::IDLE;
     float     confidence = 0.0f;
 };
 
@@ -140,10 +140,10 @@ struct UtilityAI {
     uint32_t       consideration_count = 0u;
 
     // --- Available actions ---
-    ActionType actions[MAX_ACTIONS];
+    AIActionType actions[MAX_ACTIONS];
     uint32_t  action_count = 0u;
 
-    // --- Per-action importance weights (indexed by ActionType value) ---
+    // --- Per-action importance weights (indexed by AIActionType value) ---
     float role_weights[MAX_ACTIONS];
     uint32_t role_weight_count = 0u;
 
@@ -185,7 +185,7 @@ struct UtilityAI {
     // =========================================================================
     // get_action_score — Compute utility score for a specific action
     // =========================================================================
-    float get_action_score(ActionType action, const float* inputs,
+    float get_action_score(AIActionType action, const float* inputs,
                             uint32_t input_count) const
     {
         if (consideration_count == 0u || inputs == nullptr) {
@@ -226,7 +226,7 @@ struct UtilityAI {
     // =========================================================================
     // set_action_weight — Set the role-based weight for an action
     // =========================================================================
-    void set_action_weight(ActionType action, float weight)
+    void set_action_weight(AIActionType action, float weight)
     {
         uint32_t idx = static_cast<uint32_t>(action);
         if (idx < MAX_ACTIONS) {
@@ -249,56 +249,56 @@ struct UtilityAI {
 
         switch (role) {
         case SportRole::SOCCER_GK:
-            role_weights[static_cast<uint32_t>(ActionType::DIVE_SAVE)]      = 5.0f;
-            role_weights[static_cast<uint32_t>(ActionType::FORMATION_HOLD)]  = 4.0f;
-            role_weights[static_cast<uint32_t>(ActionType::INTERCEPT)]       = 3.5f;
-            role_weights[static_cast<uint32_t>(ActionType::PUNT)]            = 3.0f;
-            role_weights[static_cast<uint32_t>(ActionType::CHASE_BALL)]      = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::DIVE_SAVE)]      = 5.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::FORMATION_HOLD)]  = 4.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::INTERCEPT)]       = 3.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::PUNT)]            = 3.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::CHASE_BALL)]      = 2.0f;
             break;
 
         case SportRole::SOCCER_CB:
         case SportRole::SOCCER_LB:
         case SportRole::SOCCER_RB:
-            role_weights[static_cast<uint32_t>(ActionType::TACKLE)]          = 3.0f;
-            role_weights[static_cast<uint32_t>(ActionType::BLOCK)]           = 2.5f;
-            role_weights[static_cast<uint32_t>(ActionType::INTERCEPT)]       = 2.5f;
-            role_weights[static_cast<uint32_t>(ActionType::MARK_OPPONENT)]   = 2.5f;
-            role_weights[static_cast<uint32_t>(ActionType::FORMATION_HOLD)]  = 2.0f;
-            role_weights[static_cast<uint32_t>(ActionType::PRESS)]           = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::TACKLE)]          = 3.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::BLOCK)]           = 2.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::INTERCEPT)]       = 2.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::MARK_OPPONENT)]   = 2.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::FORMATION_HOLD)]  = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::PRESS)]           = 2.0f;
             break;
 
         case SportRole::SOCCER_CDM:
-            role_weights[static_cast<uint32_t>(ActionType::INTERCEPT)]       = 3.0f;
-            role_weights[static_cast<uint32_t>(ActionType::TACKLE)]          = 2.5f;
-            role_weights[static_cast<uint32_t>(ActionType::SUPPORT_RUN)]     = 2.0f;
-            role_weights[static_cast<uint32_t>(ActionType::FORMATION_HOLD)]  = 2.0f;
-            role_weights[static_cast<uint32_t>(ActionType::PRESS)]           = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::INTERCEPT)]       = 3.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::TACKLE)]          = 2.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::SUPPORT_RUN)]     = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::FORMATION_HOLD)]  = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::PRESS)]           = 2.0f;
             break;
 
         case SportRole::SOCCER_CM:
-            role_weights[static_cast<uint32_t>(ActionType::SUPPORT_RUN)]     = 2.5f;
-            role_weights[static_cast<uint32_t>(ActionType::PASS_BALL)]       = 2.5f;
-            role_weights[static_cast<uint32_t>(ActionType::INTERCEPT)]       = 2.0f;
-            role_weights[static_cast<uint32_t>(ActionType::CHASE_BALL)]      = 2.0f;
-            role_weights[static_cast<uint32_t>(ActionType::FORMATION_HOLD)]  = 1.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::SUPPORT_RUN)]     = 2.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::PASS_BALL)]       = 2.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::INTERCEPT)]       = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::CHASE_BALL)]      = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::FORMATION_HOLD)]  = 1.5f;
             break;
 
         case SportRole::SOCCER_CAM:
         case SportRole::SOCCER_LW:
         case SportRole::SOCCER_RW:
-            role_weights[static_cast<uint32_t>(ActionType::PASS_BALL)]       = 3.0f;
-            role_weights[static_cast<uint32_t>(ActionType::SHOOT_BALL)]      = 2.5f;
-            role_weights[static_cast<uint32_t>(ActionType::CROSS)]           = 2.5f;
-            role_weights[static_cast<uint32_t>(ActionType::SUPPORT_RUN)]     = 2.0f;
-            role_weights[static_cast<uint32_t>(ActionType::MOVE_TO_POSITION)] = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::PASS_BALL)]       = 3.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::SHOOT_BALL)]      = 2.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::CROSS)]           = 2.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::SUPPORT_RUN)]     = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::MOVE_TO_POSITION)] = 2.0f;
             break;
 
         case SportRole::SOCCER_ST:
-            role_weights[static_cast<uint32_t>(ActionType::SHOOT_BALL)]      = 4.0f;
-            role_weights[static_cast<uint32_t>(ActionType::CHASE_BALL)]      = 3.0f;
-            role_weights[static_cast<uint32_t>(ActionType::HEADER)]          = 2.5f;
-            role_weights[static_cast<uint32_t>(ActionType::MOVE_TO_POSITION)] = 2.0f;
-            role_weights[static_cast<uint32_t>(ActionType::SUPPORT_RUN)]     = 1.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::SHOOT_BALL)]      = 4.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::CHASE_BALL)]      = 3.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::HEADER)]          = 2.5f;
+            role_weights[static_cast<uint32_t>(AIActionType::MOVE_TO_POSITION)] = 2.0f;
+            role_weights[static_cast<uint32_t>(AIActionType::SUPPORT_RUN)]     = 1.5f;
             break;
 
         default:
@@ -318,7 +318,7 @@ struct UtilityAI {
             considerations[i] = Consideration();
         }
         for (uint32_t i = 0u; i < MAX_ACTIONS; ++i) {
-            actions[i] = ActionType::IDLE;
+            actions[i] = AIActionType::IDLE;
             role_weights[i] = 1.0f;
         }
         for (uint32_t i = 0u; i < MAX_CONTEXT_FACTORS; ++i) {

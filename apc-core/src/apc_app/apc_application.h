@@ -264,7 +264,7 @@ struct Application {
 
                     UtilityDebugEntry ue;
                     ue.entity_id = a.id;
-                    ue.chosen_action = ActionType::IDLE;
+                    ue.chosen_action = static_cast<AIActionType>(0);
                     ue.confidence = a.stamina;
                     ue.position = a.position;
                     ai_debug.add_utility_entry(ue);

@@ -71,7 +71,7 @@ struct AIDebugConfig {
 // =============================================================================
 struct UtilityDebugEntry {
     EntityId   entity_id;
-    ActionType chosen_action    = ActionType::IDLE;
+    AIActionType chosen_action  = static_cast<AIActionType>(0);
     float      action_scores[8]  = {}; // Top 8 action scores
     uint8_t    action_types[8]   = {}; // Corresponding action types
     float      confidence        = 0.0f;
