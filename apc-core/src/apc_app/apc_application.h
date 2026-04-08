@@ -21,6 +21,7 @@
 // =============================================================================
 
 #include "apc_app/apc_game_loop.h"
+#include "apc_app/apc_perf_timer.h"
 #include "apc_app/apc_scene_manager.h"
 #include "apc_ai/apc_ai_debug_viz.h"
 #include "apc_input/apc_input_types.h"
@@ -93,6 +94,12 @@ struct Application {
     // --- Debug draw list (for render backend) ---
     DebugDrawList      debug_draw_list;
 
+    // --- Performance profiling ---
+    PerfReport         perf;
+    PerfSection*       perf_ai = nullptr;
+    PerfSection*       perf_physics = nullptr;
+    PerfSection*       perf_ball = nullptr;
+
     // =========================================================================
     // init — Initialize all systems
     // =========================================================================
@@ -117,6 +124,13 @@ struct Application {
 
         // Clear debug draw list
         debug_draw_list.clear();
+
+        // Initialize perf profiling
+        perf.reset();
+        perf.enabled = 1;
+        perf_ai = perf.get_section("ai_decision");
+        perf_physics = perf.get_section("physics_step");
+        perf_ball = perf.get_section("ball_interaction");
 
         state = ApplicationState::RUNNING;
         return 1;
@@ -195,6 +209,7 @@ struct Application {
 
         // --- Physics step loop ---
         while (game_loop.should_step_physics()) {
+            perf.begin_frame();
             float phys_dt = game_loop.time.fixed_delta;
 
             // --- 1. Convert human input to motor intents ---
@@ -215,6 +230,7 @@ struct Application {
             game_loop.step_physics();
 
             // --- 3. AI Decision + Steering Pipeline for all AI athletes ---
+            ScopedTimer ai_timer(perf_ai);
             const BallEntity* ball = scene.entity_manager.find_ball();
             Vec3 ball_pos = ball ? ball->position : Vec3(0.0f, 0.0f, 0.0f);
             float half_field = scene.config.field_length * 0.5f;
@@ -550,10 +566,16 @@ struct Application {
             }
 
             // --- 4. Ball interaction: kick the ball when close ---
-            scene.process_ball_interaction();
+            {
+                ScopedTimer ball_timer(perf_ball);
+                scene.process_ball_interaction();
+            }
 
             // --- 5. Step scene (entities, kinematics, timers) ---
-            scene.update(phys_dt);
+            {
+                ScopedTimer phys_timer(perf_physics);
+                scene.update(phys_dt);
+            }
 
             // --- 6. Collect debug data ---
             if (config.enable_ai_debug) {
@@ -590,6 +612,10 @@ struct Application {
         if (config.enable_ai_debug) {
             ai_debug.render(debug_draw_list);
         }
+
+        // --- Print performance report ---
+        perf.end_frame();
+        perf.print_report(240); // Print every 240 physics steps (1 second)
     }
 
     // =========================================================================

@@ -32,6 +32,9 @@ public:
     // Can be tuned per-scenario. Default provides noticeable but not extreme friction.
     float friction_coefficient = 0.4f;
 
+    // Velocity threshold below which friction impulse is zeroed (prevents jitter)
+    float friction_velocity_threshold = 0.01f;
+
     // Solver configuration
     float baumgarte_factor = 0.2f;     // Position correction strength (0-1)
     float baumgarte_slop = 0.005f;     // Penetration threshold before correction
@@ -139,7 +142,8 @@ public:
 
                 float tangent_len_sq = Vec3::length_sq(vel_tangent);
 
-                if (tangent_len_sq > APC_EPSILON_SQ) {
+                // Skip friction for very low tangential velocities (anti-jitter)
+                if (tangent_len_sq > friction_velocity_threshold * friction_velocity_threshold) {
                     // Normalize the tangential velocity to get the friction direction
                     float tangent_len = std::sqrt(tangent_len_sq);
                     Vec3 tangent = Vec3::scale(vel_tangent, 1.0f / tangent_len);
