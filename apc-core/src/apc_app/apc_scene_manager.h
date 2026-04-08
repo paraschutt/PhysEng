@@ -33,6 +33,29 @@
 namespace apc {
 
 // =============================================================================
+// SeededXorShift32 — Minimal deterministic PRNG for seed-driven variation
+// =============================================================================
+// Zero-allocation, header-only. Same seed always produces the same sequence.
+struct SeededXorShift32 {
+    uint32_t state = 1u;
+
+    explicit SeededXorShift32(uint32_t seed = 1u)
+    {
+        state = seed ? seed : 1u;
+    }
+
+    // Returns a pseudo-random float in [-1, 1]
+    float next_f() {
+        state ^= state << 13u;
+        state ^= state >> 17u;
+        state ^= state << 5u;
+        // Map uint32 to [-1, 1] float
+        int32_t signed_val = static_cast<int32_t>(state);
+        return static_cast<float>(signed_val) / static_cast<float>(0x7FFFFFFF);
+    }
+};
+
+// =============================================================================
 // SportType — Sport enumeration
 // =============================================================================
 enum class SportType : uint8_t {
@@ -62,6 +85,8 @@ struct MatchConfig {
     uint8_t       offside_enabled     = 1;
     uint8_t       var_enabled         = 0;
     uint8_t       injuries_enabled    = 0;
+    uint32_t      seed                = 42u; // Seed for deterministic variation
+    float         position_jitter     = 3.0f; // Max meters of random offset per player
 };
 
 // =============================================================================
@@ -83,6 +108,9 @@ struct SceneState {
 
     // --- Match configuration ---
     MatchConfig      config;
+
+    // --- Seed-driven PRNG for initial position jitter ---
+    SeededXorShift32 rng;
 
     // --- State ---
     uint8_t  is_loaded         = 0;
@@ -107,6 +135,9 @@ struct SceneState {
         unload();
 
         config = match_config;
+
+        // Initialize seed-driven PRNG for position jitter
+        rng = SeededXorShift32(config.seed);
 
         // --- Configure game loop (done by Application, not here) ---
         // The Application owns the single GameLoop that drives physics.
@@ -188,6 +219,12 @@ struct SceneState {
                 0.0f,
                 pos.base_position.z * config.field_width * 0.5f
             );
+
+            // Apply seed-driven position jitter for variation
+            if (config.position_jitter > 0.0f) {
+                world_pos.x += rng.next_f() * config.position_jitter;
+                world_pos.z += rng.next_f() * config.position_jitter;
+            }
 
             entity_manager.spawn_athlete(team, pos.compatible_role,
                                           world_pos, i + 1);

@@ -18,6 +18,7 @@
 #include "apc_render/apc_sdl2_renderer.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <chrono>
 #include <cmath>
 
@@ -31,7 +32,7 @@ static const char* WINDOW_TITLE  = "APC Physics Engine — Soccer [SDL2]";
 // =============================================================================
 // Main
 // =============================================================================
-int main()
+int main(int argc, char* argv[])
 {
     std::printf("============================================\n");
     std::printf(" APC Physics Engine — SDL2 Renderer\n");
@@ -108,6 +109,18 @@ int main()
 
     // --- Load soccer match ---
     apc::MatchConfig match = apc::SceneState::soccer_match();
+
+    // Allow seed override via command line: ./apc_sdl2_application [seed]
+    // e.g. ./apc_sdl2_application 1234  →  different starting positions
+    //       ./apc_sdl2_application 0     →  no jitter (exact formations)
+    if (argc > 1) {
+        int parsed = std::atoi(argv[1]);
+        match.seed = static_cast<uint32_t>(parsed);
+        if (parsed <= 0) match.position_jitter = 0.0f; // seed=0 disables jitter
+    }
+    std::printf("[OK] Match seed: %u  jitter: %.1fm\n",
+                match.seed, match.position_jitter);
+
     if (!app.load_match(match)) {
         std::printf("[ERROR] Match loading failed.\n");
         SDL_DestroyRenderer(rend.renderer);
