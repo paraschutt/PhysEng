@@ -71,7 +71,9 @@ struct SceneState {
     // --- Core subsystems ---
     EntityManager    entity_manager;
     FormationSystem  formation_system;
-    GameLoop         game_loop;
+    // NOTE: GameLoop lives in Application, not here. SceneState provides
+    // match-level state (scores, time) but does NOT own the physics clock.
+    // The old duplicate GameLoop here was dead code — removed in Phase 9a.
 
     // --- AI controllers (one per athlete) ---
     AIMotorController ai_controllers[MAX_AI_CONTROLLERS];
@@ -98,9 +100,8 @@ struct SceneState {
 
         config = match_config;
 
-        // --- Configure game loop ---
-        game_loop.init(config.half_duration > 0.0f ?
-            (1.0f / (config.half_duration * 2.0f / config.match_duration_seconds)) : PHYSICS_HZ);
+        // --- Configure game loop (done by Application, not here) ---
+        // The Application owns the single GameLoop that drives physics.
 
         // --- Set up formations ---
         formation_system.set_formation(config.home_formation, config.away_formation);
@@ -132,7 +133,6 @@ struct SceneState {
     {
         entity_manager.reset();
         formation_system.reset();
-        game_loop = GameLoop();
         config = MatchConfig();
         is_loaded         = 0;
         home_score        = 0u;
@@ -435,8 +435,7 @@ struct SceneState {
         home_score        = 0u;
         away_score        = 0u;
         match_time_seconds = 0.0f;
-        game_loop.time.accumulator = 0.0f;
-        game_loop.state = GameState::PLAYING;
+        // Note: GameLoop reset is done by Application, not here.
 
         // Reset all athletes to initial positions
         for (uint32_t i = 0u; i < entity_manager.athlete_count; ++i) {

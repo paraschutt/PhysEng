@@ -129,8 +129,7 @@ int main()
     // --- Set camera to fit the field ---
     rend.camera.auto_fit(match.field_length, match.field_width);
 
-    // --- Transition to PLAYING state ---
-    app.game_loop.state = apc::GameState::PLAYING;
+    // game_loop.start_playing() is called automatically by load_match().
 
     // --- Main loop ---
     std::printf("\n--- Simulation running (ESC to quit) ---\n\n");

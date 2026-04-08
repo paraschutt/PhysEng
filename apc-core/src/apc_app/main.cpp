@@ -158,8 +158,8 @@ int main()
     app.ai_debug.set_layer(apc::AIDebugLayer::UTILITY_SCORES, 1);
     app.ai_debug.set_layer(apc::AIDebugLayer::MOTOR_INTENT, 1);
 
-    // --- Transition game loop from WARMUP to PLAYING ---
-    app.game_loop.state = apc::GameState::PLAYING;
+    // game_loop.start_playing() is called automatically by load_match().
+    // No manual state override needed.
 
     // --- Run simulation loop ---
     // We feed monotonically increasing simulated time to the game loop.

@@ -105,6 +105,14 @@ struct GameLoop {
     }
 
     // =========================================================================
+    // start_playing — Transition from WARMUP to PLAYING
+    // =========================================================================
+    void start_playing()
+    {
+        state = GameState::PLAYING;
+    }
+
+    // =========================================================================
     // begin_frame — Call at start of each frame
     // =========================================================================
     void begin_frame(double wall_clock_time)

@@ -147,6 +147,7 @@ struct Application {
         uint8_t result = scene.load_match(match_config);
         if (result) {
             state = ApplicationState::MATCH_PLAYING;
+            game_loop.start_playing(); // Transition from WARMUP → PLAYING
         } else {
             state = ApplicationState::RUNNING;
         }
@@ -459,16 +460,35 @@ struct Application {
     // =========================================================================
     // run — Main loop (calls begin_frame/tick/end_frame until shutdown)
     // =========================================================================
+    // NOTE: This is a convenience method for headless/embedded use.
+    // For SDL2/windowed use, the external main loop calls begin_frame/tick/end_frame
+    // directly (see sdl2_main.cpp). This method uses a simple frame counter
+    // to prevent infinite loops and transitions to MATCH_ENDED after max steps.
+    // =========================================================================
     void run()
     {
         state = ApplicationState::MATCH_PLAYING;
+        uint32_t safety_counter = 0;
+        static constexpr uint32_t MAX_HEADLESS_STEPS = 2400; // 10 seconds at 240Hz
 
         while (state != ApplicationState::SHUTDOWN) {
-            double wall_time = 0.0; // Placeholder: real platform provides this
+            double wall_time = static_cast<double>(safety_counter) * game_loop.time.fixed_delta;
 
             begin_frame(wall_time);
             tick();
             end_frame();
+
+            ++safety_counter;
+
+            // Safety: prevent infinite loop in headless mode
+            if (safety_counter >= MAX_HEADLESS_STEPS) {
+                state = ApplicationState::MATCH_ENDED;
+            }
+
+            // Check for match end conditions (goal limit or time)
+            if (game_loop.state != apc::GameState::PLAYING) {
+                state = ApplicationState::MATCH_ENDED;
+            }
         }
     }
 
