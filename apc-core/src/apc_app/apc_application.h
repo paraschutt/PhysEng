@@ -437,10 +437,13 @@ struct Application {
                 UtilityScore decision = scene.utility_ai[team_idx].evaluate(
                     context_inputs, 8u);
 
-                // Enforce chase budget: if player can't chase and chose CHASE,
-                // force them to HOLD formation instead
+                // Enforce chase budget: if player can't chase and chose a
+                // ball-chasing action (CHASE, SHOOT, or PRESS), force them
+                // to HOLD formation instead. SHOOT was previously exempt,
+                // causing all strikers to converge on the ball uncontrolled.
                 if (!can_chase &&
                     (decision.action == AIActionType::CHASE_BALL ||
+                     decision.action == AIActionType::SHOOT_BALL ||
                      decision.action == AIActionType::PRESS)) {
                     decision.action = AIActionType::FORMATION_HOLD;
                     decision.score *= 0.5f;
@@ -500,13 +503,15 @@ struct Application {
                     break;
 
                 case AIActionType::SHOOT_BALL:
-                    // Steer toward ball then kick toward opponent goal
-                    if (dist_to_ball < 2.0f) {
-                        steer_target = Vec3(opp_goal_x, 0.0f, 0.0f);
+                    // Only steer to ball if within shooting range;
+                    // otherwise hold position (don't chase like CHASE)
+                    if (dist_to_ball < 1.5f) {
+                        steer_target = ball_pos;
                         urgency = 1.0f;
                     } else {
-                        steer_target = ball_pos;
-                        urgency = 0.85f;
+                        // Too far to shoot — stay in formation and wait
+                        steer_target = formation_pos;
+                        urgency = 0.3f;
                     }
                     break;
 
@@ -707,7 +712,9 @@ struct Application {
                 blended[0].weight = 1.0f;
                 blended[0].output = primary;
                 blended[1].behavior = SteeringBehavior::SEPARATION;
-                blended[1].weight = 3.0f;
+                blended[1].weight = 1.5f; // Reduced from 3.0 — was too strong,
+                    // creating a deadlock ring where players couldn't
+                    // reach the ball (separation repulsion > arrive pull)
                 blended[1].output = sep;
 
                 SteeringOutput final_steering = SteeringSystem::blend(blended, 2u);

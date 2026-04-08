@@ -213,9 +213,10 @@ struct UtilityAI {
             break;
 
         case AIActionType::SHOOT_BALL:
-            // Only makes sense when very close to ball AND close to goal
-            result *= (dist_ball < 5.0f) ? (1.0f - dist_ball / 5.0f) : 0.0f;
-            result *= (dist_goal < 30.0f) ? (1.0f - dist_goal / 30.0f) : 0.1f;
+            // Only viable within kick range — don't chase from afar
+            result *= (dist_ball < 2.0f) ? (1.0f - dist_ball / 2.0f) : 0.0f;
+            // Strongly prefer when close to opponent goal
+            result *= (dist_goal < 25.0f) ? (1.0f - dist_goal / 25.0f) : 0.05f;
             result *= stamina;
             break;
 
