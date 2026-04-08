@@ -363,11 +363,13 @@ struct SceneState {
                 last_ball_toucher = EntityId::make_invalid();
                 last_possession_team = TEAM_NONE;
                 possession_timer = 0.0f;
+                return; // Skip athlete interactions after goal reset
             } else if (oob) {
                 // Out of bounds — stop ball and reset after brief pause
                 ball->velocity = Vec3(0.0f, 0.0f, 0.0f);
                 ball_in_play = 0;
                 out_of_bounds_timer = 0.5f; // 0.5s pause then reset
+                return; // Skip athlete interactions while ball is dead
             }
         } else {
             // Ball is out of play — count down then reset
@@ -379,11 +381,14 @@ struct SceneState {
                 // Clamp to field boundary
                 if (bx < -half_field) bx = -half_field;
                 else if (bx > half_field) bx = half_field;
-                if (bz < -half_width) bz = -half_width;
-                else if (bz > half_width) bz = half_width;
+                if (bz < -half_width) bz = -(half_width - 1.0f);
+                else if (bz > half_width) bz = (half_width - 1.0f);
                 // If beyond goal line, reset to center instead
                 if (std::abs(bx) >= half_field) {
                     bx = 0.0f; bz = 0.0f;
+                } else {
+                    // Touchline OOB — place ball 1m inside the field
+                    // to prevent immediate re-OOB by nearby athletes
                 }
                 ball->position = Vec3(bx, 0.11f, bz);
                 ball->velocity = Vec3(0.0f, 0.0f, 0.0f);
