@@ -564,16 +564,7 @@ struct SceneState {
                     ball->velocity.z += to_ball_dir.z * kick_force;
                 }
 
-            } else if (action == AIActionType::SUPPORT_RUN ||
-                       action == AIActionType::MOVE_TO_POSITION ||
-                       action == AIActionType::FORMATION_HOLD) {
-                // Light touch when passing through
-                if (to_ball_len < a.radius + ball->radius + 0.3f) {
-                    kick_force = 2.0f;
-                    ball->velocity.x += to_ball_dir.x * kick_force;
-                    ball->velocity.z += to_ball_dir.z * kick_force;
-                }
-            }
+            } // else: SUPPORT_RUN, MOVE, FORMATION_HOLD, etc. do NOT touch the ball
 
             // Limit ball max speed to prevent runaway
             float ball_speed = Vec3::length(ball->velocity);

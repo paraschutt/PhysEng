@@ -326,16 +326,16 @@ struct Application {
             uint32_t max_chasers_away = 2u;
             if (ball) {
                 if (ball->possession_team == TEAM_NONE) {
-                    // Free ball: both teams chase aggressively
-                    max_chasers_home = 3u;
-                    max_chasers_away = 3u;
+                    // Free ball: both teams chase moderately
+                    max_chasers_home = 2u;
+                    max_chasers_away = 2u;
                 } else if (ball->possession_team == TEAM_HOME) {
                     // Home has ball: only 1 home chaser needed, away presses harder
                     max_chasers_home = 1u;
-                    max_chasers_away = 3u;
+                    max_chasers_away = 2u;
                 } else {
                     // Away has ball: away only needs 1 chaser, home presses harder
-                    max_chasers_home = 3u;
+                    max_chasers_home = 2u;
                     max_chasers_away = 1u;
                 }
             }
@@ -438,13 +438,13 @@ struct Application {
                     context_inputs, 8u);
 
                 // Enforce chase budget: if player can't chase and chose a
-                // ball-chasing action (CHASE, SHOOT, or PRESS), force them
-                // to HOLD formation instead. SHOOT was previously exempt,
-                // causing all strikers to converge on the ball uncontrolled.
+                // ball-chasing action, force them to HOLD formation instead.
+                // All ball-pursuing actions are gated to prevent clustering.
                 if (!can_chase &&
                     (decision.action == AIActionType::CHASE_BALL ||
                      decision.action == AIActionType::SHOOT_BALL ||
-                     decision.action == AIActionType::PRESS)) {
+                     decision.action == AIActionType::PRESS ||
+                     decision.action == AIActionType::TACKLE)) {
                     decision.action = AIActionType::FORMATION_HOLD;
                     decision.score *= 0.5f;
                 }

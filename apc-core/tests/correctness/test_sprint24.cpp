@@ -393,7 +393,7 @@ static int test_formation_system_defaults() {
 
     assert(approx_eq(sys.formation_transition_speed, 2.0f) && "transition_speed = 2.0");
     assert(approx_eq(sys.ball_influence_radius, 15.0f) && "ball_influence_radius = 15.0");
-    assert(approx_eq(sys.ball_influence_strength, 0.3f) && "ball_influence_strength = 0.3");
+    assert(approx_eq(sys.ball_influence_strength, 0.15f) && "ball_influence_strength = 0.15");
     assert(sys.cached_initialized == 0 && "cached_initialized = 0");
 
     // Sub-formation defaults

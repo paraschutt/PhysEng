@@ -284,6 +284,50 @@ struct EntityManager {
             }
         }
 
+        // --- Athlete-athlete collision resolution ---
+        // Push overlapping athletes apart at the physics level.
+        // This prevents athletes from stacking on top of each other
+        // and creating gridlocks around the ball. Two passes for stability.
+        for (uint32_t pass = 0u; pass < 2u; ++pass) {
+            for (uint32_t i = 0u; i < athlete_count; ++i) {
+                AthleteEntity& ai = athletes[i];
+                if (!ai.id.is_valid() || !ai.is_active) continue;
+                for (uint32_t j = i + 1u; j < athlete_count; ++j) {
+                    AthleteEntity& aj = athletes[j];
+                    if (!aj.id.is_valid() || !aj.is_active) continue;
+
+                    float dx = ai.position.x - aj.position.x;
+                    float dz = ai.position.z - aj.position.z;
+                    float dist_sq = dx * dx + dz * dz;
+                    float min_dist = ai.radius + aj.radius; // 0.6m for two default athletes
+
+                    if (dist_sq < min_dist * min_dist && dist_sq > APC_EPSILON) {
+                        float dist = std::sqrt(dist_sq);
+                        float overlap = min_dist - dist;
+                        float nx = dx / dist;
+                        float nz = dz / dist;
+
+                        // Push each athlete away by half the overlap
+                        float push = overlap * 0.55f; // Slightly more than half to separate faster
+                        ai.position.x += nx * push;
+                        ai.position.z += nz * push;
+                        aj.position.x -= nx * push;
+                        aj.position.z -= nz * push;
+
+                        // Kill velocity component moving into the other athlete
+                        float rel_vn = (ai.velocity.x - aj.velocity.x) * nx +
+                                       (ai.velocity.z - aj.velocity.z) * nz;
+                        if (rel_vn < 0.0f) { // Only if approaching
+                            ai.velocity.x -= nx * rel_vn * 0.5f;
+                            ai.velocity.z -= nz * rel_vn * 0.5f;
+                            aj.velocity.x += nx * rel_vn * 0.5f;
+                            aj.velocity.z += nz * rel_vn * 0.5f;
+                        }
+                    }
+                }
+            }
+        }
+
         // --- Update balls (full physics: gravity, friction, drag) ---
         for (uint32_t i = 0u; i < ball_count; ++i) {
             BallEntity& b = balls[i];

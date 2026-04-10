@@ -110,7 +110,7 @@ struct FormationSystem {
     // --- Transition parameters ---
     float formation_transition_speed = 2.0f; // How fast players shift (0-10)
     float ball_influence_radius       = 15.0f; // Ball influence range (meters)
-    float ball_influence_strength     = 0.3f;  // How much ball shifts players (0-1)
+    float ball_influence_strength     = 0.15f; // How much ball shifts players (0-1)
 
     // --- Cached interpolated positions (for smooth transitions) ---
     Vec3   cached_positions[MAX_FORMATION_POSITIONS];
@@ -546,7 +546,7 @@ struct FormationSystem {
         defense_formation.reset();
         formation_transition_speed = 2.0f;
         ball_influence_radius       = 15.0f;
-        ball_influence_strength     = 0.3f;
+        ball_influence_strength     = 0.15f;
         cached_initialized = 0;
     }
 
