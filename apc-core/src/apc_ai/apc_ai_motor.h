@@ -25,6 +25,7 @@
 #include "apc_math/apc_quat.h"
 #include "apc_math/apc_math_common.h"
 #include <cstdint>
+#include <cstring>
 #include <cmath>
 
 namespace apc {
@@ -46,6 +47,13 @@ struct AIMotorController {
 
     // --- Steering configuration ---
     SteeringRequest steering_config;
+
+    // --- Formation flocking weights ---
+    // Used to tune separation/cohesion/alignment balance per role.
+    // These are applied when blending flocking behaviors in the AI loop.
+    float separation_weight = 1.5f; // Repulsion from nearby agents
+    float cohesion_weight   = 0.5f; // Pull toward teammate centroid
+    float alignment_weight  = 0.8f; // Match teammate velocity direction
 
     // --- Per-frame state ---
     float       reaction_timer      = 0.0f;  // Counts down before acting
@@ -171,70 +179,76 @@ struct AIMotorController {
     // =========================================================================
     // set_preset — Configure controller for a specific role
     // =========================================================================
+    // Uses strcmp for exact string matching instead of first-character
+    // comparison, preventing collisions between presets that share
+    // the same starting letter (e.g. "forward" vs a hypothetical
+    // "fullback").
+    // =========================================================================
     void set_preset(const char* name)
     {
         if (name == nullptr) return;
 
-        // Simple string matching (deterministic, no strcmp needed)
-        uint8_t match = 0u;
-        uint8_t idx = 0u;
-        const char* p = name;
-        while (*p) { ++idx; ++p; }
-
-        // Match by first character for speed
-        char first = name[0];
-        if (first == 'd') {
-            // "defender"
+        if (std::strcmp(name, "defender") == 0) {
+            // Defender: slow reaction, accurate, low aggression, tight block
             reaction_delay = 0.12f;
             accuracy       = 0.85f;
             aggression     = 0.4f;
             skill_level    = 0.75f;
             steering_config.max_speed = 7.0f;
             steering_config.max_force = 15.0f;
-            match = 1u;
+            separation_weight = 1.2f;
+            cohesion_weight   = 1.0f; // Stay in defensive line
+            alignment_weight  = 1.0f;
         }
-        if (first == 'm') {
-            // "midfielder"
+        else if (std::strcmp(name, "midfielder") == 0) {
+            // Midfielder: balanced, good alignment to move as a unit
             reaction_delay = 0.10f;
             accuracy       = 0.80f;
             aggression     = 0.5f;
             skill_level    = 0.70f;
             steering_config.max_speed = 7.5f;
             steering_config.max_force = 18.0f;
-            match = 1u;
+            separation_weight = 1.5f;
+            cohesion_weight   = 0.8f;
+            alignment_weight  = 1.2f;
         }
-        if (first == 'f') {
-            // "forward"
+        else if (std::strcmp(name, "forward") == 0) {
+            // Forward: fast reaction, high aggression, spread for attack
             reaction_delay = 0.08f;
             accuracy       = 0.75f;
             aggression     = 0.7f;
             skill_level    = 0.80f;
             steering_config.max_speed = 8.5f;
             steering_config.max_force = 22.0f;
-            match = 1u;
+            separation_weight = 1.8f; // More spacing for attacking width
+            cohesion_weight   = 0.5f;
+            alignment_weight  = 0.8f;
         }
-        if (first == 'g') {
-            // "goalkeeper"
+        else if (std::strcmp(name, "goalkeeper") == 0) {
+            // Goalkeeper: fast reaction, very accurate, low aggression
             reaction_delay = 0.06f;
             accuracy       = 0.90f;
             aggression     = 0.3f;
             skill_level    = 0.85f;
             steering_config.max_speed = 9.0f;
             steering_config.max_force = 25.0f;
-            match = 1u;
+            separation_weight = 1.0f;
+            cohesion_weight   = 1.2f; // Stay near goal line
+            alignment_weight  = 0.6f;
         }
-        if (first == 'p') {
-            // "point_guard"
+        else if (std::strcmp(name, "point_guard") == 0) {
+            // Point guard: quick, accurate, moderate spacing
             reaction_delay = 0.07f;
             accuracy       = 0.88f;
             aggression     = 0.6f;
             skill_level    = 0.82f;
             steering_config.max_speed = 8.0f;
             steering_config.max_force = 20.0f;
-            match = 1u;
+            separation_weight = 2.0f; // Court spacing
+            cohesion_weight   = 0.6f;
+            alignment_weight  = 0.9f;
         }
-
-        (void)match; // Prevent unused warning
+        // Unknown preset name: keep current values (no-op)
     }
 
     // --- Reset controller state ---

@@ -169,6 +169,8 @@ struct SteeringSystem {
     }
 
     // --- Pursue: predict future target position and seek it ---
+    // Uses target_vel for velocity prediction. The agent's own velocity
+    // parameter is reserved for future velocity-matching variants.
     static SteeringOutput pursue(const Vec3& position, const Vec3& velocity,
                                   const Vec3& target_pos,
                                   const Vec3& target_vel,
@@ -181,12 +183,14 @@ struct SteeringSystem {
         to_target.y = 0.0f;
         float dist = Vec3::length(to_target);
 
-        // Look-ahead time based on distance / max_speed, capped
+        // Dynamic look-ahead: proportional to distance, inversely to speed.
+        // Capped to avoid wild predictions at extreme range.
         float look_ahead = dist / (max_speed + APC_EPSILON);
         if (look_ahead > max_prediction_time) {
             look_ahead = max_prediction_time;
         }
 
+        // Steer toward predicted future position of the target
         Vec3 future_target = Vec3::add(target_pos,
             Vec3::scale(target_vel, look_ahead));
         future_target.y = target_pos.y;
@@ -195,29 +199,33 @@ struct SteeringSystem {
     }
 
     // --- Evade: inverse of pursue (flee predicted future threat position) ---
+    // Uses threat_vel for velocity prediction, same look-ahead logic as pursue.
     static SteeringOutput evade(const Vec3& position, const Vec3& velocity,
                                  const Vec3& threat_pos,
                                  const Vec3& threat_vel,
                                  float max_speed,
                                  float max_prediction_time)
     {
-        (void)velocity;
+        (void)velocity; // Reserved for future velocity-matching variants
 
         Vec3 to_threat = Vec3::sub(threat_pos, position);
         to_threat.y = 0.0f;
         float dist = Vec3::length(to_threat);
 
+        // Same dynamic look-ahead as pursue
         float look_ahead = dist / (max_speed + APC_EPSILON);
         if (look_ahead > max_prediction_time) {
             look_ahead = max_prediction_time;
         }
 
+        // Predict future threat position, then flee from it
         Vec3 future_threat = Vec3::add(threat_pos,
             Vec3::scale(threat_vel, look_ahead));
         future_threat.y = threat_pos.y;
 
-        return flee(position, future_threat, max_speed,
-                    max_prediction_time * max_speed * 2.0f);
+        // Panic radius derived from max prediction range
+        float panic_radius = max_prediction_time * max_speed * 2.0f;
+        return flee(position, future_threat, max_speed, panic_radius);
     }
 
     // --- Wander: circle-ahead wander with deterministic deviation ---
@@ -318,21 +326,47 @@ struct SteeringSystem {
         return seek(position, center, max_speed);
     }
 
-    // --- Alignment: steer to match average heading of neighbors ---
-    // NOTE: neighbors[] contains positions, not velocities. Without access
-    // to neighbor velocities, we approximate alignment by steering toward
-    // the average position of nearby agents (cohesion-like behavior).
-    // True velocity-based alignment requires a neighbor velocity query.
-    static SteeringOutput alignment(const Vec3* neighbors, uint32_t count,
-                                     const Vec3& /*heading*/,
-                                     float /*max_force*/)
+    // --- Alignment: steer to match average velocity of neighbors ---
+    // Sums velocity vectors of all valid (non-zero-speed) neighbors,
+    // normalizes the average, and returns it as the desired steering.
+    // positions[] is optional (reserved for future radius-based filtering);
+    // velocities[] provides the actual velocity data to align with.
+    static SteeringOutput alignment(const Vec3* positions, const Vec3* velocities,
+                                     uint32_t count,
+                                     float max_force)
     {
         SteeringOutput out;
-        // Without neighbor velocity data, alignment is a no-op.
-        // The calling code should use cohesion + separation for flocking.
-        // TODO: Pass neighbor velocities when EntityManager supports it.
-        (void)count;
-        (void)neighbors;
+        if (count == 0u || velocities == nullptr) {
+            return out;
+        }
+
+        Vec3 avg_vel(0.0f, 0.0f, 0.0f);
+        uint32_t valid_count = 0u;
+
+        for (uint32_t i = 0u; i < count; ++i) {
+            Vec3 vel = velocities[i];
+            vel.y = 0.0f;
+            float speed = Vec3::length(vel);
+            if (speed > APC_EPSILON) {
+                avg_vel = Vec3::add(avg_vel, vel);
+                ++valid_count;
+            }
+        }
+
+        if (valid_count > 0u) {
+            float inv = 1.0f / static_cast<float>(valid_count);
+            avg_vel = Vec3::scale(avg_vel, inv);
+            avg_vel.y = 0.0f;
+            // Steer toward the average velocity direction, clamped to max_force
+            float avg_speed = Vec3::length(avg_vel);
+            if (avg_speed > APC_EPSILON) {
+                avg_vel = Vec3::scale(avg_vel, max_force / avg_speed);
+            }
+            out.linear = truncate(avg_vel, max_force);
+            out.linear.y = 0.0f;
+        }
+
+        (void)positions; // Reserved for future radius-based neighbor filtering
         return out;
     }
 

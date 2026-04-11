@@ -405,33 +405,45 @@ static int test_cohesion_pulls_to_centroid() {
 }
 
 // =============================================================================
-// TEST 15: SteeringSystem::alignment matches neighbor heading
+// TEST 15: SteeringSystem::alignment matches neighbor velocity direction
 // =============================================================================
 static int test_alignment_matches_heading() {
-    std::printf("  [Test 15] SteeringSystem::alignment (no-op without velocities)...\n");
+    std::printf("  [Test 15] SteeringSystem::alignment (velocity-based)...\n");
 
-    apc::Vec3 heading(0.0f, 0.0f, 0.0f); // Zero heading
-
-    // Neighbors used as approximate velocity proxies (internally multiplied by 0.5)
-    // Two "velocity" neighbors at (4, 0, 0) and (4, 0, 0)
-    apc::Vec3 neighbors[2] = {
-        apc::Vec3(4.0f, 0.0f, 0.0f),
-        apc::Vec3(4.0f, 0.0f, 0.0f)
+    // Two neighbors both moving in +X at 3 m/s
+    apc::Vec3 positions[2] = {
+        apc::Vec3(5.0f, 0.0f, 0.0f),
+        apc::Vec3(5.0f, 0.0f, 3.0f)
+    };
+    apc::Vec3 velocities[2] = {
+        apc::Vec3(3.0f, 0.0f, 0.0f),
+        apc::Vec3(3.0f, 0.0f, 0.0f)
     };
 
-    // alignment() is currently a no-op (returns zero output) because
-    // it only receives neighbor positions, not velocities.
+    // Alignment should steer toward the average velocity direction (+X)
     apc::SteeringOutput out = apc::SteeringSystem::alignment(
-        neighbors, 2, heading, 20.0f);
+        positions, velocities, 2, 20.0f);
 
-    assert(approx_eq(apc::Vec3::length(out.linear), 0.0f) && "alignment: no-op = 0 output");
+    float mag = apc::Vec3::length(out.linear);
+    assert(mag > 0.0f && "alignment: non-zero output with moving neighbors");
+    assert(out.linear.x > 0.0f && "alignment: steers toward +X (avg velocity)");
+    assert(approx_eq(out.linear.y, 0.0f) && "alignment: Y = 0");
 
-    // No neighbors → also zero output
+    // No neighbors → zero output
     apc::SteeringOutput out_empty = apc::SteeringSystem::alignment(
-        nullptr, 0, heading, 20.0f);
+        nullptr, nullptr, 0, 20.0f);
     assert(approx_eq(apc::Vec3::length(out_empty.linear), 0.0f) && "alignment: no neighbors = 0");
 
-    std::printf("    [PASS] alignment steers to match neighbor heading\n");
+    // All zero velocities → zero output (no valid neighbors)
+    apc::Vec3 zero_vels[2] = {
+        apc::Vec3(0.0f, 0.0f, 0.0f),
+        apc::Vec3(0.0f, 0.0f, 0.0f)
+    };
+    apc::SteeringOutput out_zero = apc::SteeringSystem::alignment(
+        positions, zero_vels, 2, 20.0f);
+    assert(approx_eq(apc::Vec3::length(out_zero.linear), 0.0f) && "alignment: zero velocities = 0");
+
+    std::printf("    [PASS] alignment steers to match average neighbor velocity\n");
     return 0;
 }
 
