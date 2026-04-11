@@ -541,6 +541,57 @@ public:
     }
 
     // -----------------------------------------------------------------------
+    // apply_warmstart_to_constraint
+    // -----------------------------------------------------------------------
+    /// Bridge method: extract warmstart impulses from a persistent manifold
+    /// and apply them to solver constraint accumulators.
+    ///
+    /// Call this after ContactManager::update() and before Solver3D::solve()
+    /// to initialize each VelocityConstraint's accumulated impulses from the
+    /// previous frame's solver output.
+    ///
+    /// Returns true if a warmstart match was found and impulses were applied.
+    // -----------------------------------------------------------------------
+    APC_FORCEINLINE bool apply_warmstart_to_constraint(
+        uint32_t id_a, uint32_t id_b,
+        const Vec3& constraint_point_on_a,
+        float& out_normal_impulse,
+        Vec3& out_friction_impulse) const
+    {
+        const PersistentManifold* pm = get_persistent(id_a, id_b);
+        if (pm == nullptr) {
+            return false;
+        }
+
+        float best_dist_sq = 1e30f;
+        uint32_t best_idx = MAX_CONTACTS_PER_PAIR;
+
+        for (uint32_t i = 0u; i < pm->contact_count; ++i) {
+            const float d = detail::contact_dist_sq(
+                constraint_point_on_a,
+                pm->contacts[i].contact.point_on_a
+            );
+            if (d < best_dist_sq) {
+                best_dist_sq = d;
+                best_idx = i;
+            }
+        }
+
+        if (best_idx < pm->contact_count &&
+            best_dist_sq < APC_CONTACT_MATCH_DISTANCE_SQ)
+        {
+            out_normal_impulse =
+                pm->contacts[best_idx].accumulated_normal_impulse * APC_WARMSTART_FACTOR;
+            out_friction_impulse =
+                Vec3::scale(pm->contacts[best_idx].accumulated_friction_impulse,
+                            APC_WARMSTART_FACTOR);
+            return true;
+        }
+
+        return false;
+    }
+
+    // -----------------------------------------------------------------------
     // clear
     // -----------------------------------------------------------------------
     /// Clear all persistent state. Call on scene reset.
