@@ -489,6 +489,143 @@ static void test_pipeline_order() {
 }
 
 // =============================================================================
+// TEST 16: AI fires once per 60Hz render frame (decoupled from 240Hz physics)
+// =============================================================================
+static void test_ai_decoupled_tick() {
+    std::printf("  [Test 16] AI fires once per 60Hz render frame...\n");
+
+    apc::GameLoop loop;
+    loop.init(240.0f, 60.0f);
+    loop.start_playing();
+
+    // Simulate one 60Hz render frame (1/60s ≈ 4 physics steps, but only 1 AI tick)
+    float render_dt = 1.0f / 60.0f;
+    loop.time.ai_accumulator = render_dt;
+
+    check(loop.should_step_ai() == 1, "60Hz frame: AI should fire once");
+
+    // After consuming, accumulator should have a small remainder
+    // (1/60 - 1/60 = 0, but due to float precision it should be ~0)
+    loop.step_ai();
+    check(loop.time.ai_step_count == 1u, "ai_step_count = 1");
+
+    // Second AI tick should NOT fire yet (no more accumulated time)
+    check(loop.should_step_ai() == 0, "no second AI tick without more time");
+
+    std::printf("    [PASS] AI fires exactly once per 60Hz frame\n");
+}
+
+// =============================================================================
+// TEST 17: AI fires at 30Hz when configured (different rate than physics)
+// =============================================================================
+static void test_ai_custom_tick_rate() {
+    std::printf("  [Test 17] AI fires at custom 30Hz rate...\n");
+
+    apc::GameLoop loop;
+    loop.init(240.0f, 30.0f); // 240Hz physics, 30Hz AI
+    loop.start_playing();
+
+    float render_dt = 1.0f / 60.0f;
+    loop.time.ai_accumulator = render_dt;
+
+    // 1/60 = 0.01666s. AI tick is 1/30 = 0.03333s. Not enough yet.
+    check(loop.should_step_ai() == 0, "30Hz AI: not enough time after 1/60s");
+
+    // Add another 1/60s → 2/60 = 1/30 = AI fires
+    loop.time.ai_accumulator += render_dt;
+    check(loop.should_step_ai() == 1, "30Hz AI: fires after 2/60s = 1/30s");
+
+    loop.step_ai();
+    // Remainder should be ~0 (2/60 - 1/30 = 0)
+    check(loop.time.ai_accumulator < 0.0001f,
+          "30Hz AI: accumulator drained after tick");
+
+    std::printf("    [PASS] AI fires at custom 30Hz rate\n");
+}
+
+// =============================================================================
+// TEST 18: Full pipeline — AI tick + physics steps interleaved correctly
+// =============================================================================
+static void test_ai_physics_interleaved_pipeline() {
+    std::printf("  [Test 18] AI + physics interleaved pipeline...\n");
+
+    apc::GameLoop loop;
+    loop.init(240.0f, 60.0f);
+    loop.start_playing();
+    loop.time.max_steps_per_frame = 8u;
+
+    float render_dt = 1.0f / 60.0f;
+    loop.time.accumulator = render_dt;
+    loop.time.ai_accumulator = render_dt;
+
+    uint32_t physics_steps = 0;
+    uint32_t ai_ticks = 0;
+
+    // Simulate the interleaved tick pattern that the application uses:
+    // For each physics step, check if AI should also fire.
+    while (loop.should_step_physics() && physics_steps < 8u) {
+        // AI fires INSIDE the physics step loop (once per render frame)
+        if (loop.should_step_ai()) {
+            loop.step_ai();
+            ++ai_ticks;
+        }
+
+        loop.step_physics();
+        ++physics_steps;
+    }
+
+    check(physics_steps == 4, "interleaved: 4 physics steps per 60Hz frame");
+    check(ai_ticks == 1, "interleaved: 1 AI tick per 60Hz frame");
+    check(loop.time.physics_step_count == 4, "interleaved: physics_step_count = 4");
+    check(loop.time.ai_step_count == 1u, "interleaved: ai_step_count = 1");
+
+    // Simulate a second 60Hz frame
+    loop.time.accumulator += render_dt;
+    loop.time.ai_accumulator += render_dt;
+
+    physics_steps = 0;
+    ai_ticks = 0;
+    while (loop.should_step_physics() && physics_steps < 8u) {
+        if (loop.should_step_ai()) {
+            loop.step_ai();
+            ++ai_ticks;
+        }
+        loop.step_physics();
+        ++physics_steps;
+    }
+
+    check(physics_steps == 4, "frame 2: 4 more physics steps");
+    check(ai_ticks == 1, "frame 2: 1 more AI tick");
+    check(loop.time.physics_step_count == 8, "total: 8 physics steps after 2 frames");
+    check(loop.time.ai_step_count == 2u, "total: 2 AI ticks after 2 frames");
+
+    std::printf("    [PASS] AI + physics interleaved: 4 physics + 1 AI per 60Hz frame\n");
+}
+
+// =============================================================================
+// TEST 19: AI blocked when paused (same as physics)
+// =============================================================================
+static void test_ai_blocked_when_paused() {
+    std::printf("  [Test 19] AI blocked when paused...\n");
+
+    apc::GameLoop loop;
+    loop.init(240.0f, 60.0f);
+    loop.start_playing();
+
+    loop.time.ai_accumulator = loop.time.ai_fixed_delta * 2.0f;
+    check(loop.should_step_ai() == 1, "pre-pause: AI would fire");
+
+    loop.pause();
+    check(loop.should_step_ai() == 0, "paused: AI blocked");
+    check(loop.should_step_physics() == 0, "paused: physics blocked");
+
+    loop.resume();
+    check(loop.should_step_ai() == 1, "resumed: AI fires again");
+
+    std::printf("    [PASS] AI blocked when paused, restored on resume\n");
+}
+
+// =============================================================================
 // Main
 // =============================================================================
 int main() {
@@ -509,7 +646,11 @@ int main() {
     test_start_playing_transition();
     test_toggle_pause_cycle();
     test_pipeline_order();
+    test_ai_decoupled_tick();
+    test_ai_custom_tick_rate();
+    test_ai_physics_interleaved_pipeline();
+    test_ai_blocked_when_paused();
 
-    std::printf("\n=== Game Loop: 15 tests passed (%d assertions) ===\n", g_assertions);
+    std::printf("\n=== Game Loop: 19 tests passed (%d assertions) ===\n", g_assertions);
     return 0;
 }

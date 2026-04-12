@@ -30,6 +30,8 @@ namespace apc {
 // =============================================================================
 static constexpr float   PHYSICS_HZ           = 240.0f;
 static constexpr float   PHYSICS_DT           = 1.0f / PHYSICS_HZ;
+static constexpr float   AI_HZ                = 60.0f;    // Decoupled AI cognitive tick
+static constexpr float   AI_DT                = 1.0f / AI_HZ;
 static constexpr uint32_t MAX_STEPS_PER_FRAME = 8u;
 
 // =============================================================================
@@ -39,11 +41,16 @@ struct TimeState {
     double   current_time      = 0.0;    // Seconds since start
     float    delta_time        = 0.0f;   // Last frame time
     float    fixed_delta       = PHYSICS_DT;
-    float    accumulator       = 0.0f;   // Time to simulate
+    float    accumulator       = 0.0f;   // Time to simulate (physics)
     float    time_scale        = 1.0f;   // 1.0 = normal, 0.5 = slow-mo
     uint32_t frame_count        = 0u;
     uint32_t physics_step_count = 0u;
+    uint32_t ai_step_count      = 0u;     // Number of AI cognitive ticks fired
     uint32_t max_steps_per_frame = MAX_STEPS_PER_FRAME;
+
+    // --- AI accumulator (decoupled from physics) ---
+    float    ai_fixed_delta     = AI_DT;   // 1/60s AI evaluation interval
+    float    ai_accumulator     = 0.0f;   // Time until next AI tick
 };
 
 // =============================================================================
@@ -51,6 +58,7 @@ struct TimeState {
 // =============================================================================
 struct FixedTimestepConfig {
     float   physics_hz         = PHYSICS_HZ;
+    float   ai_hz              = AI_HZ;    // AI cognitive tick rate (decoupled)
     float   max_frame_time     = 0.1f;    // Clamp max delta
     float   slow_motion_min    = 0.1f;    // Minimum time scale
     float   slow_motion_max    = 2.0f;    // Maximum time scale
@@ -84,7 +92,7 @@ struct GameLoop {
     // =========================================================================
     // init — Initialize timing system
     // =========================================================================
-    void init(float physics_hz = PHYSICS_HZ)
+    void init(float physics_hz = PHYSICS_HZ, float ai_hz = AI_HZ)
     {
         time.current_time      = 0.0;
         time.delta_time        = 0.0f;
@@ -93,9 +101,13 @@ struct GameLoop {
         time.time_scale        = 1.0f;
         time.frame_count        = 0u;
         time.physics_step_count = 0u;
+        time.ai_step_count      = 0u;
         time.max_steps_per_frame = MAX_STEPS_PER_FRAME;
+        time.ai_fixed_delta     = 1.0f / ai_hz;
+        time.ai_accumulator     = 0.0f;
 
         config.physics_hz         = physics_hz;
+        config.ai_hz              = ai_hz;
         config.max_frame_time     = 0.1f;
         config.slow_motion_min    = 0.1f;
         config.slow_motion_max    = 2.0f;
@@ -136,6 +148,9 @@ struct GameLoop {
         // Add to accumulator with time_scale
         float scaled_dt = time.delta_time * time.time_scale;
         time.accumulator += scaled_dt;
+
+        // Also accumulate AI time (same time_scale so slow-mo affects AI too)
+        time.ai_accumulator += scaled_dt;
     }
 
     // =========================================================================
@@ -154,6 +169,27 @@ struct GameLoop {
     {
         time.accumulator -= time.fixed_delta;
         ++time.physics_step_count;
+    }
+
+    // =========================================================================
+    // should_step_ai — Check if enough time for an AI cognitive tick
+    // =========================================================================
+    // The AI tick is decoupled from physics: it fires at ai_hz (default 60Hz)
+    // regardless of the 240Hz physics rate. AI writes a target MotorIntent;
+    // the 240Hz physics loop simply consumes that cached intent.
+    uint8_t should_step_ai() const
+    {
+        if (state != GameState::PLAYING) return 0;
+        return (time.ai_accumulator >= time.ai_fixed_delta) ? 1u : 0u;
+    }
+
+    // =========================================================================
+    // step_ai — Consume one AI tick from accumulator
+    // =========================================================================
+    void step_ai()
+    {
+        time.ai_accumulator -= time.ai_fixed_delta;
+        ++time.ai_step_count;
     }
 
     // =========================================================================
