@@ -188,6 +188,18 @@ struct AthleteEntity {
     float sprint_cooldown  = 0.0f;
     float tackle_cooldown  = 0.0f;
 
+    // --- AI Hysteresis: Action commitment tracking (Phase 11b Action 5) ---
+    // Records the AIActionType of the action chosen on the previous frame.
+    // The UtilityAI evaluate_with_hysteresis() method applies a 15%
+    // commitment bonus to this action, preventing oscillation between
+    // two equally-scored decisions.
+    uint32_t active_action_id = 0xFFFFFFFFu;
+
+    // --- Perception Delay (Phase 11b Action 6, pre-allocated) ---
+    // Number of frames the AI waits before reacting to a new stimulus.
+    // At 60Hz AI tick: 12 frames = 200ms reaction time.
+    uint32_t reaction_frames = 12u;
+
     // --- Deterministic ordering ---
     uint32_t unique_id = 0u; // Hash for deterministic ordering
 
@@ -214,9 +226,11 @@ struct AthleteEntity {
         health          = 1.0f;
         is_human_controlled = 0;
         is_active       = 0;
-        sprint_cooldown = 0.0f;
-        tackle_cooldown = 0.0f;
-        unique_id       = 0u;
+        sprint_cooldown  = 0.0f;
+        tackle_cooldown  = 0.0f;
+        active_action_id = 0xFFFFFFFFu;
+        reaction_frames  = 12u;
+        unique_id        = 0u;
     }
 
     // --- Query: is entity active? ---

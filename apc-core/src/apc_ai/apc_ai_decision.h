@@ -457,6 +457,18 @@ struct UtilityAI {
     }
 
     // =========================================================================
+    // HYSTERESIS_BONUS — Commitment bonus to prevent decision oscillation
+    // =========================================================================
+    // Phase 11b Action 5: When the AI evaluated actions on the previous frame
+    // and chose action X, action X receives this bonus on the current frame.
+    // This prevents the AI from rapidly flipping between two actions whose
+    // raw scores are within noise of each other (e.g., CHASE_BALL at 0.42
+    // vs SUPPORT_RUN at 0.41). The 15% value means the AI needs to see a
+    // clear 15% advantage before switching — a natural "commitment" window.
+    // =========================================================================
+    static constexpr float HYSTERESIS_BONUS = 0.15f;
+
+    // =========================================================================
     // clear_actions — Wipes the AI's action memory for sport transitions
     // =========================================================================
     // When switching sports (e.g., soccer -> basketball), call this first
@@ -481,6 +493,66 @@ struct UtilityAI {
         if (action_count < MAX_ACTIONS) {
             actions[action_count++] = action;
         }
+    }
+
+    // =========================================================================
+    // evaluate_with_hysteresis — Score all actions with 15% commitment bonus
+    // =========================================================================
+    // Phase 11b Action 5: Utility Hysteresis
+    //
+    // Same logic as evaluate() but applies HYSTERESIS_BONUS to the action
+    // that was chosen on the previous frame (tracked via entity.active_action_id).
+    // After evaluation, the winning action's ID is written back to
+    // entity.active_action_id for the next frame's hysteresis check.
+    //
+    // This eliminates oscillation without changing the underlying scoring
+    // math — it only biases the selection toward the incumbent action.
+    //
+    // Parameters:
+    //   inputs        — Context factor array (same as evaluate())
+    //   input_count   — Number of valid context factors
+    //   entity        — The athlete being evaluated (non-const: writes active_action_id)
+    //
+    // Returns:
+    //   UtilityScore with the hysteresis-adjusted best action
+    // =========================================================================
+    UtilityScore evaluate_with_hysteresis(const float* inputs, uint32_t input_count,
+                                          AthleteEntity& entity) const
+    {
+        UtilityScore best;
+        best.score = -1.0f;
+
+        for (uint32_t a = 0u; a < action_count; ++a) {
+            float action_score = get_action_score(actions[a], inputs, input_count);
+
+            // Apply role weight if available
+            uint32_t action_idx = static_cast<uint32_t>(actions[a]);
+            if (action_idx < role_weight_count) {
+                action_score *= role_weights[action_idx];
+            }
+
+            // Apply hysteresis: if this action was chosen last frame, boost it
+            if (action_idx == entity.active_action_id) {
+                action_score += HYSTERESIS_BONUS;
+                // Clamp to prevent float overflow on combined modifiers
+                if (action_score > 1.15f) action_score = 1.15f;
+            }
+
+            if (action_score > best.score) {
+                best.score      = action_score;
+                best.action     = actions[a];
+                best.confidence = action_score;
+            }
+        }
+
+        // Clamp confidence to [0, 1]
+        if (best.confidence < 0.0f) best.confidence = 0.0f;
+        if (best.confidence > 1.0f) best.confidence = 1.0f;
+
+        // Lock in the decision for the next frame's hysteresis check
+        entity.active_action_id = static_cast<uint32_t>(best.action);
+
+        return best;
     }
 
     // --- Reset all state ---
