@@ -480,7 +480,6 @@ struct SceneState {
             break;
         }
         case SportType::AMERICAN_FOOTBALL: {
-            float gw = geo.goal_width * 0.5f;
             // Home endzone
             field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
                 Vec3(-half_l - 10.0f, 0.0f, -half_w),
@@ -519,13 +518,12 @@ struct SceneState {
     // injected as either threat (opponent team) or control (own team).
     //
     // Parameters:
-    //   field             — SportField for spatial mapping and semantic queries
     //   team_perspective  — Which team is evaluating (its opponents are threats)
     //
     // Call this from the Application layer after pushing a perception snapshot
     // but before evaluating individual AI decisions.
     // =========================================================================
-    void build_influence_map(const SportField& field, uint8_t team_perspective)
+    void build_influence_map(uint8_t team_perspective)
     {
         influence_map.initialize(field);
         influence_map.clear();
@@ -578,7 +576,7 @@ struct SceneState {
         }
 
         // Build spatial influence map (baseline 12-frame team perspective)
-        build_influence_map(field, static_cast<uint8_t>(TEAM_HOME));
+        build_influence_map(static_cast<uint8_t>(TEAM_HOME));
 
         // Live ball for chase budget (game-mechanics, not AI perception)
         const BallEntity* ball = entity_manager.find_ball();
