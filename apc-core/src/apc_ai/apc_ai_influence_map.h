@@ -119,7 +119,7 @@ public:
         int cell_radius_x = static_cast<int>((radius_m / field_ext_x) * GRID_WIDTH) + 1;
         int cell_radius_z = static_cast<int>((radius_m / field_ext_z) * GRID_HEIGHT) + 1;
 
-        auto& target_grid = is_threat ? threat_grid : control_grid;
+        float (*target_grid)[GRID_HEIGHT] = is_threat ? threat_grid : control_grid;
 
         for (int x = center_x - cell_radius_x; x <= center_x + cell_radius_x; ++x) {
             for (int z = center_z - cell_radius_z; z <= center_z + cell_radius_z; ++z) {
