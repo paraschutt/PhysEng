@@ -25,6 +25,7 @@
 #include "apc_ai/apc_ai_formation.h"
 #include "apc_ai/apc_ai_motor.h"
 #include "apc_ai/apc_ai_decision.h"
+#include "apc_ai/apc_ai_perception.h"  // PerceptionRingBuffer (Phase 11b Action 6)
 #include "apc_input/apc_input_types.h"
 #include "apc_math/apc_vec3.h"
 #include "apc_math/apc_math_common.h"
@@ -104,6 +105,11 @@ struct SceneState {
 
     // --- Utility AI (one per team) ---
     UtilityAI        utility_ai[2];
+
+    // --- Perception ring buffer for AI reaction delay (Phase 11b Action 6) ---
+    // Snapshots the world state every 60Hz tick; AI queries delayed frames
+    // based on each athlete's reaction_frames stat (default: 12 = 200ms).
+    PerceptionRingBuffer perception_buffer;
 
     // --- Match configuration ---
     MatchConfig      config;
@@ -187,6 +193,7 @@ struct SceneState {
         }
         utility_ai[0].reset();
         utility_ai[1].reset();
+        perception_buffer.clear();
     }
 
     // =========================================================================
