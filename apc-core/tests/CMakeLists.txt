@@ -56,6 +56,13 @@ target_link_libraries(test_dispatch PRIVATE apc_core)
 add_test(NAME DispatchCorrectness COMMAND test_dispatch)
 
 # ---------------------------------------------------------
+# FixedPoint 16.16 Deterministic Math
+# ---------------------------------------------------------
+add_executable(test_fixedpoint correctness/test_fixedpoint.cpp)
+target_link_libraries(test_fixedpoint PRIVATE apc_core)
+add_test(NAME FixedPointCorrectness COMMAND test_fixedpoint)
+
+# ---------------------------------------------------------
 # Integration Tests
 # ---------------------------------------------------------
 # Pipeline test: Broadphase + GJK narrowphase
