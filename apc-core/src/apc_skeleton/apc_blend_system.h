@@ -38,6 +38,7 @@
 #include "apc_skeleton_types.h"
 #include "apc_skeletal_pose.h"
 #include "apc_skeleton/apc_skeletal_fk.h"
+#include "apc_skeleton/apc_loop_closure.h"  // LoopClosureConstraint for degradation
 #include "apc_math/apc_math_common.h"
 #include <vector>
 #include <cmath>
@@ -279,7 +280,94 @@ public:
         return bone.physics.mode;
     }
 
+    // -------------------------------------------------------------------------
+    // apply_degradation — Handle degraded loop closure constraints.
+    //
+    // For each constraint flagged as degraded by LoopClosureMonitor, smoothly
+    // reduces the affected bones' stiffness toward 0.0 (handing control back
+    // to the animation system) and transitions them to BLENDED mode if they
+    // are currently PHYSICS_DRIVEN.
+    //
+    // Stiffness is used as the effective "physics weight": when stiffness -> 0,
+    // the spring-damper has no effect and the bone follows the animation target.
+    //
+    // Should be called AFTER LoopClosureMonitor::evaluate() each frame.
+    // -------------------------------------------------------------------------
+    static void apply_degradation(
+        const LoopClosureConstraint* constraints,
+        uint32_t constraint_count,
+        SkeletalAsset& asset,
+        float dt)
+    {
+        if (dt <= 0.0f) return;
+
+        for (uint32_t i = 0; i < constraint_count; ++i) {
+            const LoopClosureConstraint& c = constraints[i];
+            if (!c.is_degraded) continue;
+            if (c.bone_a >= asset.get_bone_count()) continue;
+            if (c.bone_b >= asset.get_bone_count()) continue;
+
+            BonePhysicsState& state_a = asset.bones[c.bone_a].physics;
+            BonePhysicsState& state_b = asset.bones[c.bone_b].physics;
+
+            // Force into BLENDED mode if currently pure physics.
+            // BLENDED mode allows the spring-damper to gradually release
+            // control to animation as stiffness decreases.
+            if (state_a.mode == PhysicsBlendMode::PHYSICS_DRIVEN) {
+                state_a.mode = PhysicsBlendMode::BLENDED;
+            }
+            if (state_b.mode == PhysicsBlendMode::PHYSICS_DRIVEN) {
+                state_b.mode = PhysicsBlendMode::BLENDED;
+            }
+
+            // Smoothly interpolate stiffness down toward 0.0.
+            // At stiffness = 0.0, the spring-damper has no effect and the
+            // bone fully follows the animation target (effectively anim-driven).
+            // DEGRADATION_RATE = 5.0 means stiffness goes from 1.0 to 0.0
+            // in ~0.2 seconds.
+            state_a.stiffness -= DEGRADATION_RATE * dt;
+            if (state_a.stiffness < 0.0f) state_a.stiffness = 0.0f;
+
+            state_b.stiffness -= DEGRADATION_RATE * dt;
+            if (state_b.stiffness < 0.0f) state_b.stiffness = 0.0f;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // restore_from_degradation — Reset bone blend state after a degraded
+    // constraint is cleared by the rules engine.
+    //
+    // Restores the bones' stiffness and transitions them back to their
+    // intended mode for normal physics simulation.
+    // -------------------------------------------------------------------------
+    static void restore_from_degradation(
+        const LoopClosureConstraint* constraints,
+        uint32_t constraint_count,
+        SkeletalAsset& asset,
+        PhysicsBlendMode restore_mode = PhysicsBlendMode::PHYSICS_DRIVEN,
+        float restore_stiffness = 1.0f)
+    {
+        for (uint32_t i = 0; i < constraint_count; ++i) {
+            const LoopClosureConstraint& c = constraints[i];
+            if (!c.is_degraded) continue;
+            if (c.bone_a >= asset.get_bone_count()) continue;
+            if (c.bone_b >= asset.get_bone_count()) continue;
+
+            BonePhysicsState& state_a = asset.bones[c.bone_a].physics;
+            BonePhysicsState& state_b = asset.bones[c.bone_b].physics;
+
+            state_a.mode = restore_mode;
+            state_a.stiffness = restore_stiffness;
+
+            state_b.mode = restore_mode;
+            state_b.stiffness = restore_stiffness;
+        }
+    }
+
 private:
+    // Degradation rate: stiffness units per second.
+    // 5.0 means stiffness goes from 1.0 to 0.0 in ~0.2 seconds.
+    static constexpr float DEGRADATION_RATE = 5.0f;
     static float aba_clamp(float val, float min_val, float max_val) {
         if (val < min_val) return min_val;
         if (val > max_val) return max_val;

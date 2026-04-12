@@ -53,6 +53,10 @@ struct LoopClosureConstraint {
     float damping;            // Velocity damping on constraint
     uint8_t enabled;          // Is this constraint active?
 
+    // --- Degradation monitoring (set by LoopClosureMonitor) ---
+    float current_error_sq = 0.0f;  // Most recent positional error squared (m^2)
+    uint8_t is_degraded = 0u;        // Flagged when error exceeds safe threshold
+
     /// Default: disabled constraint
     LoopClosureConstraint()
         : type(LoopClosureType::Distance)
@@ -63,6 +67,8 @@ struct LoopClosureConstraint {
         , stiffness(1000.0f)
         , damping(50.0f)
         , enabled(0)
+        , current_error_sq(0.0f)
+        , is_degraded(0u)
     {}
 
     /// Create a distance constraint between two bone points.
@@ -267,6 +273,90 @@ private:
         }
         if (lc.bone_b < state.external_forces.size()) {
             state.external_forces[lc.bone_b].add_force(Vec3::scale(correction, -0.5f));
+        }
+    }
+};
+
+// =============================================================================
+// LoopClosureMonitor — Degradation detection for closed-loop constraints
+// =============================================================================
+//
+// Continuously monitors the positional error on loop closure constraints.
+// If the ABA solver fails to keep the error within a safe threshold (indicating
+// the loop is too complex, forces are too high, or the chain is collapsing),
+// the constraint is flagged as "degraded".
+//
+// The BlendSystem intercepts degraded constraints and smoothly lerps the
+// affected bones' stiffness toward 0.0, handing control back to the animation
+// system to cleanly resolve the pose.
+//
+// Once degraded, a constraint stays degraded until explicitly cleared by
+// the rules engine (e.g., when the tackle/grapple is broken). This prevents
+// violent snapping if the error temporarily dips below the threshold.
+//
+// =============================================================================
+class LoopClosureMonitor {
+public:
+    // Threshold where open-tree math fails to resolve the closed loop.
+    // 0.15 m^2 corresponds to ~38.7cm of joint separation — beyond this
+    // the iterative constraint solver cannot converge reliably.
+    static constexpr float MAX_SAFE_ERROR_SQ = 0.15f;
+
+    /// Evaluate degradation on an array of constraints.
+    /// Computes the current positional error squared for each enabled constraint
+    /// and flags it as degraded if the error exceeds MAX_SAFE_ERROR_SQ.
+    ///
+    /// Should be called AFTER LoopClosureSolver::resolve() so that
+    /// current_error_sq reflects the post-solve state.
+    ///
+    /// Call with constraints as non-const since is_degraded and
+    /// current_error_sq are written.
+    static void evaluate(
+        LoopClosureConstraint* constraints,
+        uint32_t constraint_count,
+        const SkeletalPose& world_pose)
+    {
+        for (uint32_t i = 0; i < constraint_count; ++i) {
+            LoopClosureConstraint& c = constraints[i];
+            if (!c.enabled) continue;
+            if (c.bone_a >= world_pose.world_transforms.size()) continue;
+            if (c.bone_b >= world_pose.world_transforms.size()) continue;
+
+            const Transform& tf_a = world_pose.world_transforms[c.bone_a];
+            const Transform& tf_b = world_pose.world_transforms[c.bone_b];
+
+            // World positions of the constrained points
+            Vec3 world_a = Vec3::add(tf_a.translation,
+                tf_a.rotation.rotate(c.local_point_a));
+            Vec3 world_b = Vec3::add(tf_b.translation,
+                tf_b.rotation.rotate(c.local_point_b));
+
+            // Compute positional error squared between the two bound points
+            c.current_error_sq = Vec3::length_sq(Vec3::sub(world_a, world_b));
+
+            // Trigger degradation if error spikes past the safe limit.
+            // Once degraded, stays degraded until explicitly cleared by
+            // clear_degradation() (typically when the grapple/tackle ends).
+            if (c.current_error_sq > MAX_SAFE_ERROR_SQ) {
+                c.is_degraded = 1u;
+            }
+        }
+    }
+
+    /// Clear the degraded flag on a specific constraint.
+    /// Call this when the rules engine breaks the grapple/tackle.
+    static void clear_degradation(LoopClosureConstraint& c) {
+        c.is_degraded = 0u;
+        c.current_error_sq = 0.0f;
+    }
+
+    /// Clear degradation on all constraints in an array.
+    static void clear_all_degradation(
+        LoopClosureConstraint* constraints,
+        uint32_t constraint_count)
+    {
+        for (uint32_t i = 0; i < constraint_count; ++i) {
+            clear_degradation(constraints[i]);
         }
     }
 };
