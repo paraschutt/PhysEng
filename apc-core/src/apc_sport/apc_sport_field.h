@@ -6,11 +6,20 @@
 // Defines the physical playing environment for various sports:
 //
 //   - SportType: enumeration of supported sports
+//   - FieldType: shape/layout of the playing field
 //   - FieldGeometry: dimensions, shape, boundary markers
-//   - FieldZone: regions with different surfaces/properties
+//   - ZoneSemantic: generic semantic zone meanings (Phase 11a — AI/Physics)
+//   - SemanticFieldZone: AABB mapped to a ZoneSemantic
+//   - [LEGACY] FieldZoneId: sport-specific zone IDs (renderer/HUD only)
+//   - [LEGACY] FieldZone: sport-specific zone definition (renderer/HUD only)
 //   - GoalPost: goal structure geometry
-//   - NetVolume: net collision volume
 //   - BoundaryEvent: out-of-bounds, scoring triggers
+//   - SportField: complete field with zones, goals, boundaries
+//
+// Phase 11a Architecture:
+//   The AI and Physics engines consume ONLY ZoneSemantic via
+//   SportField::get_zone_at(). The legacy FieldZoneId/FieldZone system
+//   is retained for the renderer and HUD layers.
 //
 // Design:
 //   - Header-only, apc:: namespace
@@ -301,7 +310,54 @@ struct FieldGeometry {
 };
 
 // =============================================================================
-// FieldZone — Named region of the field with specific properties
+// 1. ZoneSemantic — Generic semantic zone meanings (Phase 11a)
+// =============================================================================
+// The AI uses these to evaluate positional threat and legality.
+// A corner kick, an inbound pass, and a lineout all map to the same
+// semantic requirement; the AI only needs to know the rule:
+//   "I cannot stand in a RESTRICTED_OFFENSE zone for more than X seconds."
+// It doesn't care if that zone is a basketball paint or a hockey crease.
+//
+// Semantic mapping examples:
+//   Penalty area (soccer)           -> RESTRICTED_DEFENSE
+//   Goalie crease (hockey)          -> RESTRICTED_DEFENSE
+//   Key/paint (basketball)          -> RESTRICTED_OFFENSE
+//   3-second lane (basketball)      -> RESTRICTED_OFFENSE
+//   Offside trap area               -> RESTRICTED_OFFENSE
+//   Goal net volume (soccer)        -> SCORING_TARGET
+//   Hoop cylinder (basketball)      -> SCORING_TARGET
+//   Endzone (American football)     -> SCORING_TARGET
+//   General playing field           -> NEUTRAL_PLAYING_FIELD
+//   Out of bounds                   -> OUT_OF_BOUNDS
+// =============================================================================
+enum class ZoneSemantic : uint8_t {
+    NEUTRAL_PLAYING_FIELD,
+    RESTRICTED_OFFENSE,  // e.g., Offside trap area, offensive paint (3-second rule)
+    RESTRICTED_DEFENSE,  // e.g., Goalie crease, defensive penalty area
+    SCORING_TARGET,      // e.g., The goal net volume, the hoop cylinder, the endzone
+    OUT_OF_BOUNDS        // Dead ball triggers
+};
+
+// =============================================================================
+// 2. SemanticFieldZone — AABB mapped to a semantic meaning (Phase 11a)
+// =============================================================================
+// Used by AI/Physics to evaluate positional legality.
+// Added via SportField::add_semantic_zone().
+// =============================================================================
+struct SemanticFieldZone {
+    ZoneSemantic semantic;
+    Vec3 min_bounds;
+    Vec3 max_bounds;
+
+    // Sport-specific string hash for HUD rendering / debugging (AI ignores this)
+    uint32_t display_name_hash = 0;
+};
+
+// =============================================================================
+// [LEGACY] FieldZoneId — Sport-specific zone identifiers
+// =============================================================================
+// Retained for FieldRenderer and HUD layer only.
+// AI/Physics should consume ZoneSemantic via SportField::get_zone_at().
 // =============================================================================
 enum class FieldZoneId : uint8_t {
     FULL_FIELD     = 0,
@@ -326,6 +382,12 @@ enum class FieldZoneId : uint8_t {
     MAX_ZONES      = 19
 };
 
+// =============================================================================
+// [LEGACY] FieldZone — Named region with sport-specific properties
+// =============================================================================
+// Retained for FieldRenderer and HUD layer only.
+// AI/Physics should use SemanticFieldZone + SportField::get_zone_at().
+// =============================================================================
 struct FieldZone {
     FieldZoneId zone_id;
     const char* name;
@@ -434,33 +496,51 @@ struct BoundaryEvent {
 // SportField — Complete playing field with geometry, goals, zones
 // =============================================================================
 struct SportField {
-    static constexpr uint32_t MAX_ZONES = 20;
+    static constexpr uint32_t MAX_ZONES = 20;           // Legacy zones (renderer)
+    static constexpr uint32_t MAX_SEMANTIC_ZONES = 32;   // Semantic zones (AI/Physics)
     static constexpr uint32_t MAX_GOALS = 4;
     static constexpr uint32_t MAX_EVENTS = 32;
 
     FieldGeometry geometry;
-    FieldZone zones[MAX_ZONES];
-    uint32_t zone_count = 0;
-    GoalPost goals[MAX_GOALS];
-    uint32_t goal_count = 0;
-    BoundaryEvent pending_events[MAX_EVENTS];
-    uint32_t event_count = 0;
     SurfaceBounceTable surface_table;
 
+    // --- [LEGACY] Zone system for renderer/HUD ---
+    FieldZone zones[MAX_ZONES];
+    uint32_t zone_count = 0;
+
+    // --- [Phase 11a] Semantic zone system for AI/Physics ---
+    SemanticFieldZone semantic_zones[MAX_SEMANTIC_ZONES];
+    uint32_t semantic_zone_count = 0;
+
+    // --- Goals ---
+    GoalPost goals[MAX_GOALS];
+    uint32_t goal_count = 0;
+
+    // --- Boundary events ---
+    BoundaryEvent pending_events[MAX_EVENTS];
+    uint32_t event_count = 0;
+
+    // =========================================================================
+    // setup — Initialize field with geometry
+    // =========================================================================
     void setup(const FieldGeometry& geo) {
         geometry = geo;
         surface_table = SurfaceBounceTable::make_default();
         zone_count = 0;
+        semantic_zone_count = 0;
         goal_count = 0;
         event_count = 0;
 
-        // Default: full field zone
+        // Default: full field zone (legacy)
         add_zone(FieldZoneId::FULL_FIELD, "full_field",
             Vec3(0.0f, 0.0f, 0.0f),
             Vec3(geo.length * 0.5f, 50.0f, geo.width * 0.5f),
             geo.default_surface);
     }
 
+    // =========================================================================
+    // [LEGACY] add_zone — Add a sport-specific zone (renderer/HUD)
+    // =========================================================================
     void add_zone(FieldZoneId id, const char* name,
                    const Vec3& center, const Vec3& extents,
                    SurfaceType surface = SurfaceType::GRASS,
@@ -478,9 +558,57 @@ struct SportField {
         z.team_id = team;
     }
 
+    // =========================================================================
+    // add_semantic_zone — Add a generic semantic zone (Phase 11a — AI/Physics)
+    // =========================================================================
+    // In your Scene/Sport loading pipeline, call this based on the loaded
+    // sport configuration. For soccer, add RESTRICTED_DEFENSE for the
+    // 18-yard box. For basketball, add RESTRICTED_OFFENSE for the key.
+    // Smaller, overriding zones (like goal net) should be added AFTER
+    // larger encompassing zones (like penalty area).
+    // =========================================================================
+    void add_semantic_zone(ZoneSemantic semantic, const Vec3& min_b,
+                            const Vec3& max_b, uint32_t name_hash = 0)
+    {
+        if (semantic_zone_count < MAX_SEMANTIC_ZONES) {
+            semantic_zones[semantic_zone_count++] = {semantic, min_b, max_b, name_hash};
+        }
+    }
+
     void add_goal(const GoalPost& goal) {
         if (goal_count >= MAX_GOALS) return;
         goals[goal_count++] = goal;
+    }
+
+    // =========================================================================
+    // get_zone_at — Fast O(N) semantic zone lookup for AI/Physics
+    // =========================================================================
+    // Iterates backwards: smaller, overriding zones (like the goal net)
+    // are assumed to be added after the larger encompassing zones.
+    // Falls back to outer_dimensions bounds check for OUT_OF_BOUNDS.
+    // =========================================================================
+    ZoneSemantic get_zone_at(const Vec3& position) const {
+        // Iterate backwards: smaller overriding zones take priority
+        for (int32_t i = static_cast<int32_t>(semantic_zone_count) - 1; i >= 0; --i) {
+            const auto& z = semantic_zones[i];
+            // Simple AABB point inclusion test
+            if (position.x >= z.min_bounds.x && position.x <= z.max_bounds.x &&
+                position.y >= z.min_bounds.y && position.y <= z.max_bounds.y &&
+                position.z >= z.min_bounds.z && position.z <= z.max_bounds.z) {
+                return z.semantic;
+            }
+        }
+
+        // If not in a specific sub-zone, check if we are out of bounds
+        float half_w = geometry.width * 0.5f;
+        float half_l = geometry.length * 0.5f;
+
+        if (position.x < -half_l || position.x > half_l ||
+            position.z < -half_w || position.z > half_l) {
+            return ZoneSemantic::OUT_OF_BOUNDS;
+        }
+
+        return ZoneSemantic::NEUTRAL_PLAYING_FIELD;
     }
 
     // --- Check if a point is in bounds ---
