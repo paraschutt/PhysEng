@@ -510,8 +510,25 @@ struct SceneState {
     // =========================================================================
     void evaluate_ai_decisions(float dt)
     {
+        // Phase 14 Action 2: Snapshot current world into perception buffer.
+        // Each athlete queries get_delayed_state(own reaction_frames) to
+        // see the world as it was N ticks ago — not the live state.
+        {
+            const BallEntity* snap_ball = entity_manager.find_ball();
+            perception_buffer.push_state(
+                snap_ball ? snap_ball->position : Vec3(0.0f, 0.0f, 0.0f),
+                snap_ball ? snap_ball->velocity : Vec3(0.0f, 0.0f, 0.0f),
+                snap_ball ? snap_ball->possession_team : TEAM_NONE,
+                ball_in_play,
+                entity_manager.athletes, entity_manager.athlete_count);
+        }
+
+        // Build spatial influence map (baseline 12-frame team perspective)
+        build_influence_map(field, static_cast<uint8_t>(TEAM_HOME));
+
+        // Live ball for chase budget (game-mechanics, not AI perception)
         const BallEntity* ball = entity_manager.find_ball();
-        Vec3 ball_pos = ball ? ball->position : Vec3(0.0f, 0.0f, 0.0f);
+        Vec3 live_ball_pos = ball ? ball->position : Vec3(0.0f, 0.0f, 0.0f);
         float half_field = config.field_length * 0.5f;
 
         uint32_t home_player_idx = 0u;
@@ -525,7 +542,7 @@ struct SceneState {
         for (uint32_t ii = 0u; ii < entity_manager.athlete_count; ++ii) {
             const AthleteEntity& aa = entity_manager.athletes[ii];
             if (!aa.id.is_valid() || aa.is_human_controlled) continue;
-            float d = Vec3::length(Vec3::sub(aa.position, ball_pos));
+            float d = Vec3::length(Vec3::sub(aa.position, live_ball_pos));
             if (aa.team == TEAM_HOME && home_rank_count < MAX_ATHLETES) {
                 home_ranks[home_rank_count++] = { ii, d };
             } else if (aa.team == TEAM_AWAY && away_rank_count < MAX_ATHLETES) {
@@ -575,19 +592,27 @@ struct SceneState {
             if (!a.id.is_valid() || a.is_human_controlled) continue;
             if (i >= MAX_AI_CONTROLLERS) continue;
 
+            // Phase 14 Action 2: Per-athlete delayed perception.
+            // A veteran with reaction_frames=6 sees the present;
+            // a fatigued rookie with reaction_frames=18 sees 300ms ago.
+            const PerceptionSnapshot& snap = perception_buffer.get_delayed_state(a.reaction_frames);
+            Vec3 ball_pos = snap.ball_position;  // Delayed ball position
+            Vec3 ball_vel = snap.ball_velocity;  // Delayed ball velocity
+
             float dist_to_ball = Vec3::length(Vec3::sub(a.position, ball_pos));
             float own_goal_x = (a.team == TEAM_HOME) ? -half_field : half_field;
             float opp_goal_x = (a.team == TEAM_HOME) ?  half_field : -half_field;
             float dist_opp_goal = std::abs(a.position.x - opp_goal_x);
 
+            // Phase 14 Action 2: possession rank from DELAYED teammate positions
             float has_possession = 0.0f;
             if (last_possession_team == a.team && possession_timer > 0.0f) {
                 float own_rank = 0u;
-                for (uint32_t j = 0u; j < entity_manager.athlete_count; ++j) {
-                    if (j == i) continue;
-                    const AthleteEntity& other = entity_manager.athletes[j];
-                    if (!other.id.is_valid() || other.team != a.team) continue;
-                    float other_dist = Vec3::length(Vec3::sub(other.position, ball_pos));
+                for (uint32_t j = 0u; j < snap.athlete_count; ++j) {
+                    const AthletePercept& tm = snap.athletes[j];
+                    if (tm.entity_index == a.id.index) continue;
+                    if (!tm.is_active || tm.team != a.team) continue;
+                    float other_dist = Vec3::length(Vec3::sub(tm.position, ball_pos));
                     if (other_dist < dist_to_ball) ++own_rank;
                 }
                 has_possession = (own_rank == 0u) ? 1.0f : (own_rank == 1u) ? 0.5f : 0.2f;
@@ -616,11 +641,13 @@ struct SceneState {
             float dist_to_formation = Vec3::length(Vec3::sub(a.position, form_pos_pq));
             float position_quality = 1.0f - std::min(dist_to_formation / 20.0f, 1.0f);
 
+            // Phase 14 Action 2: nearest opponent from DELAYED perception
             float nearest_opp_dist = 999.0f;
-            for (uint32_t j = 0u; j < entity_manager.athlete_count; ++j) {
-                if (j == i) continue;
-                const AthleteEntity& opp = entity_manager.athletes[j];
-                if (!opp.id.is_valid() || opp.team == a.team) continue;
+            for (uint32_t j = 0u; j < snap.athlete_count; ++j) {
+                const AthletePercept& opp = snap.athletes[j];
+                if (!opp.is_active) continue;
+                if (opp.entity_index == a.id.index) continue;
+                if (opp.team == a.team) continue;
                 float od = Vec3::length(Vec3::sub(opp.position, a.position));
                 if (od < nearest_opp_dist) nearest_opp_dist = od;
             }
@@ -680,9 +707,9 @@ struct SceneState {
             case AIActionType::CHASE_BALL:
                 steer_target = ball_pos;
                 urgency = 0.9f;
-                if (dist_to_ball < 3.0f && ball) {
+                if (dist_to_ball < 3.0f) {
                     Vec3 predicted = Vec3::add(ball_pos,
-                        Vec3::scale(ball->velocity, 0.3f));
+                        Vec3::scale(ball_vel, 0.3f));
                     predicted.y = 0.0f;
                     steer_target = predicted;
                 }
@@ -713,25 +740,26 @@ struct SceneState {
                 urgency = 0.95f;
                 break;
             case AIActionType::INTERCEPT:
-                if (ball) {
+                {
                     float predict_time = dist_to_ball / (max_speed + APC_EPSILON);
                     if (predict_time > 1.0f) predict_time = 1.0f;
                     steer_target = Vec3::add(ball_pos,
-                        Vec3::scale(ball->velocity, predict_time));
+                        Vec3::scale(ball_vel, predict_time));
                     steer_target.y = 0.0f;
-                } else {
-                    steer_target = ball_pos;
                 }
                 urgency = 0.8f;
                 break;
             case AIActionType::FORMATION_HOLD:
             case AIActionType::TACKLE:
                 {
+                    // Phase 14 Action 2: nearest opponent from DELAYED perception
                     float tackle_opp_dist = 999.0f;
                     Vec3 tackle_opp_pos = a.position;
-                    for (uint32_t j = 0u; j < entity_manager.athlete_count; ++j) {
-                        const AthleteEntity& opp = entity_manager.athletes[j];
-                        if (!opp.id.is_valid() || opp.team == a.team) continue;
+                    for (uint32_t j = 0u; j < snap.athlete_count; ++j) {
+                        const AthletePercept& opp = snap.athletes[j];
+                        if (!opp.is_active) continue;
+                        if (opp.entity_index == a.id.index) continue;
+                        if (opp.team == a.team) continue;
                         float d = Vec3::length(Vec3::sub(opp.position, a.position));
                         if (d < tackle_opp_dist) {
                             tackle_opp_dist = d;
@@ -749,13 +777,14 @@ struct SceneState {
                 }
                 break;
             case AIActionType::PASS_BALL:
-                if (dist_to_ball < 2.0f && ball) {
+                if (dist_to_ball < 2.0f) {
+                    // Phase 14 Action 2: find best forward from DELAYED teammates
                     float best_forward = -999.0f;
                     Vec3 best_teammate_pos = a.position;
-                    for (uint32_t j = 0u; j < entity_manager.athlete_count; ++j) {
-                        if (j == i) continue;
-                        const AthleteEntity& tm = entity_manager.athletes[j];
-                        if (!tm.id.is_valid() || tm.team != a.team) continue;
+                    for (uint32_t j = 0u; j < snap.athlete_count; ++j) {
+                        const AthletePercept& tm = snap.athletes[j];
+                        if (tm.entity_index == a.id.index) continue;
+                        if (!tm.is_active || tm.team != a.team) continue;
                         float fwd = (a.team == TEAM_HOME) ? tm.position.x : -tm.position.x;
                         float dist = Vec3::length(Vec3::sub(tm.position, a.position));
                         if (fwd > best_forward && dist > 3.0f && dist < 30.0f) {
@@ -780,11 +809,14 @@ struct SceneState {
                 break;
             case AIActionType::MARK_OPPONENT:
                 {
+                    // Phase 14 Action 2: mark target from DELAYED perception
                     float mark_dist = 999.0f;
                     Vec3 mark_pos = a.position;
-                    for (uint32_t j = 0u; j < entity_manager.athlete_count; ++j) {
-                        const AthleteEntity& opp = entity_manager.athletes[j];
-                        if (!opp.id.is_valid() || opp.team == a.team) continue;
+                    for (uint32_t j = 0u; j < snap.athlete_count; ++j) {
+                        const AthletePercept& opp = snap.athletes[j];
+                        if (!opp.is_active) continue;
+                        if (opp.entity_index == a.id.index) continue;
+                        if (opp.team == a.team) continue;
                         float d = Vec3::length(Vec3::sub(opp.position, a.position));
                         if (d < mark_dist) {
                             mark_dist = d;
@@ -800,7 +832,7 @@ struct SceneState {
                 }
                 break;
             case AIActionType::CROSS:
-                if (dist_to_ball < 2.0f && ball) {
+                if (dist_to_ball < 2.0f) {
                     steer_target = Vec3(opp_goal_x * 0.6f, 0.0f, 0.0f);
                     urgency = 0.9f;
                 } else {
@@ -813,14 +845,12 @@ struct SceneState {
                 urgency = 0.85f;
                 break;
             case AIActionType::DIVE_SAVE:
-                if (ball) {
+                {
                     Vec3 dive_target = Vec3::add(ball_pos,
-                        Vec3::scale(ball->velocity, 0.15f));
+                        Vec3::scale(ball_vel, 0.15f));
                     dive_target.x = own_goal_x + (a.team == TEAM_HOME ? 2.0f : -2.0f);
                     dive_target.y = 0.0f;
                     steer_target = dive_target;
-                } else {
-                    steer_target = Vec3(own_goal_x, 0.0f, 0.0f);
                 }
                 urgency = 1.0f;
                 break;
