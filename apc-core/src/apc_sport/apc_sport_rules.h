@@ -5,12 +5,22 @@
 //
 // Defines the rules framework that governs gameplay:
 //
-//   - PlayState: current game state (in play, dead ball, etc.)
-//   - SportRulesConfig: per-sport rule configuration
+//   - SemanticPlayState: generic state semantics for AI/Physics consumption
+//   - SemanticFoulConsequence: generic foul consequence for AI/Physics
+//   - SportRulesConfig: injected per-sport rule configuration for AI
+//   - SportEventContext: sport-specific event payload (HUD/Logging)
+//   - PlayState: [LEGACY] sport-specific game state (HUD/Rules engine only)
+//   - FoulType: [LEGACY] sport-specific foul classification (Discipline only)
+//   - CardType: disciplinary actions
 //   - ScoringSystem: point values, scoring conditions
-//   - FoulSystem: foul detection, card accumulation
+//   - DisciplineSystem: foul detection, card accumulation
 //   - ClockSystem: game clock, shot clock, timeouts
-//   - SportRulesEngine: top-level rules engine that processes events
+//
+// Phase 11a Architecture:
+//   The AI and Physics engines consume ONLY SemanticPlayState and
+//   SemanticFoulConsequence. The underlying SportRulesEngine can still
+//   track the specific sport-specific PlayState/FoulType for the UI/HUD,
+//   but simulation and AI layers only consume the semantic meaning.
 //
 // Design:
 //   - Header-only, apc:: namespace
@@ -28,40 +38,141 @@
 namespace apc {
 
 // =============================================================================
-// PlayState — Current state of play
+// 1. Semantic Play States (Phase 11a — Replaces the God Enum for AI/Physics)
 // =============================================================================
-enum class PlayState : uint8_t {
-    NOT_STARTED     = 0,
-    KICKOFF         = 1,    // Play is starting
-    LIVE            = 2,    // Ball is in play
-    DEAD_BALL       = 3,    // Ball is out of play (foul, out-of-bounds, etc.)
-    GOAL_SCORED     = 4,    // Goal just scored
-    TIMEOUT         = 5,    // Play stopped for timeout
-    PERIOD_END      = 6,    // End of period/quarter/half
-    GAME_OVER       = 7,    // Game finished
-    OVERTIME        = 8,    // Extra time
-    SHOOTOUT        = 9,    // Penalty shootout
-    INJURY_STOP     = 10,   // Play stopped for injury
-    VAR_REVIEW      = 11,   // Video review (deterministic: auto-resolve)
-    FREE_KICK       = 12,   // Set piece
-    CORNER_KICK     = 13,   // Corner kick
-    PENALTY_KICK    = 14,   // Penalty kick
-    THROW_IN        = 15,   // Throw-in (soccer)
-    LINEOUT         = 16,   // Lineout (rugby)
-    SCRUM           = 17,   // Scrum (rugby)
-    FACEOFF         = 18,   // Faceoff (hockey)
-    JUMP_BALL       = 19,   // Jump ball (basketball)
-    POSSESSION      = 20,   // General possession change
-    INBOUND         = 21,   // Inbounding the ball
-    KICKOFF_RECEIVE = 22,   // Receiving a kickoff
-    EXTRA_POINT     = 23,   // Extra point attempt
-    TWO_POINT_CONV  = 24,   // Two-point conversion
-    PUNT_PLAY       = 25,   // Punt in progress
-    FIELD_GOAL      = 26    // Field goal attempt
+// The AI and Physics engines ONLY consume these generic semantics.
+// Instead of asking "Is the state CORNER_KICK?", the AI asks
+// "Is the state SET_PIECE_OFFENSE?" — a corner kick, an inbound pass,
+// and a lineout all resolve to the same AI tactical requirement.
+//
+// Semantic mapping examples:
+//   KICKOFF        -> SET_PIECE_NEUTRAL
+//   CORNER_KICK    -> SET_PIECE_OFFENSE
+//   FREE_KICK      -> SET_PIECE_OFFENSE
+//   THROW_IN       -> SET_PIECE_OFFENSE
+//   LINEOUT        -> SET_PIECE_DEFENSE
+//   SCRUM          -> SET_PIECE_NEUTRAL
+//   FACEOFF        -> SET_PIECE_NEUTRAL
+//   JUMP_BALL      -> SET_PIECE_NEUTRAL
+//   INBOUND        -> SET_PIECE_OFFENSE
+//   LIVE           -> LIVE_PLAY
+//   DEAD_BALL      -> DEAD_BALL
+//   GOAL_SCORED    -> SCORING_EVENT
+//   TIMEOUT        -> INTERMISSION
+//   HALFTIME       -> INTERMISSION
+//   NOT_STARTED    -> PRE_GAME
+//   GAME_OVER      -> INTERMISSION
+// =============================================================================
+enum class SemanticPlayState : uint8_t {
+    PRE_GAME,
+    LIVE_PLAY,          // Ball is active, open play
+    DEAD_BALL,          // Play is halted, clock may be stopped
+    SET_PIECE_NEUTRAL,  // e.g., Faceoff, Jump Ball, Scrum
+    SET_PIECE_OFFENSE,  // e.g., Corner Kick, Inbound Pass, Free Kick
+    SET_PIECE_DEFENSE,  // Defending the above
+    SCORING_EVENT,      // Celebration/reset phase
+    INTERMISSION        // Halftime, Timeouts
 };
 
 // =============================================================================
-// FoulType — Types of fouls
+// 2. Semantic Foul Consequences (Phase 11a — Replaces the God Enum for AI)
+// =============================================================================
+// The AI doesn't care if it was a "High Tackle" or "Charging";
+// it only evaluates the risk based on the consequence.
+//
+// Semantic mapping examples:
+//   NONE / DELAY_OF_GAME             -> NONE
+//   OFFSIDE / TRAVELING               -> TURNOVER
+//   ADVANTAGE_PLAY                    -> PENALTY_ADVANTAGE
+//   PENALTY_KICK / FREE_THROW         -> PENALTY_SHOT
+//   YELLOW_CARD / SIN_BIN             -> TEMPORARY_EJECTION
+//   RED_CARD / FLAGRANT_FOUL          -> MATCH_EJECTION
+//   MINOR_FOUL (first/second)         -> WARNING
+// =============================================================================
+enum class SemanticFoulConsequence : uint8_t {
+    NONE,
+    WARNING,
+    TURNOVER,           // Loss of possession (e.g., Offside, Traveling)
+    PENALTY_ADVANTAGE,  // Play continues (e.g., Soccer advantage)
+    PENALTY_SHOT,       // Direct scoring opportunity given (e.g., Free throw, Penalty kick)
+    TEMPORARY_EJECTION, // e.g., Yellow card, Sin bin, Penalty box
+    MATCH_EJECTION      // e.g., Red card, Flagrant 2
+};
+
+// =============================================================================
+// 3. Sport Rule Configuration (Phase 11a)
+// =============================================================================
+// Injected by the SceneManager so the AI knows what physics actions are legal.
+// This decouples the AI from sport-specific rule details.
+// =============================================================================
+struct SportRulesConfig {
+    SemanticPlayState current_state = SemanticPlayState::PRE_GAME;
+
+    // AI Legal/Utility Constraints
+    bool offside_rule_active = false;
+    float allowed_contact_severity = 0.0f; // 0.0 = non-contact, 1.0 = full tackle
+    bool hands_allowed_field = false;      // True for Rugby/Basketball, False for Soccer
+    bool feet_allowed_field = true;        // True for Soccer/Rugby, False for Basketball
+
+    // Limits
+    uint32_t max_fouls_before_ejection = 0;
+    uint32_t possession_clock_max_ms = 0;  // e.g., 24000 for basketball shot clock
+};
+
+// =============================================================================
+// 4. Specific Sport Event Payload (Phase 11a)
+// =============================================================================
+// Keeps the specific flavor text/IDs out of the AI layer.
+// Used by HUD / Logging / Rules Engine for sport-specific display.
+// =============================================================================
+struct SportEventContext {
+    uint32_t sport_specific_event_id = 0;  // Maps to localized strings (e.g., "Corner Kick")
+    uint32_t primary_athlete_id = 0;
+    uint32_t secondary_athlete_id = 0;
+    SemanticFoulConsequence consequence = SemanticFoulConsequence::NONE;
+};
+
+// =============================================================================
+// [LEGACY] PlayState — Sport-specific game state
+// =============================================================================
+// Retained for HUD, DisciplineSystem, and rules engine internal use.
+// AI and Physics layers should consume SemanticPlayState instead.
+// =============================================================================
+enum class PlayState : uint8_t {
+    NOT_STARTED     = 0,
+    KICKOFF         = 1,    // -> SemanticPlayState::SET_PIECE_NEUTRAL
+    LIVE            = 2,    // -> SemanticPlayState::LIVE_PLAY
+    DEAD_BALL       = 3,    // -> SemanticPlayState::DEAD_BALL
+    GOAL_SCORED     = 4,    // -> SemanticPlayState::SCORING_EVENT
+    TIMEOUT         = 5,    // -> SemanticPlayState::INTERMISSION
+    PERIOD_END      = 6,    // -> SemanticPlayState::INTERMISSION
+    GAME_OVER       = 7,    // -> SemanticPlayState::INTERMISSION
+    OVERTIME        = 8,    // -> SemanticPlayState::LIVE_PLAY
+    SHOOTOUT        = 9,    // -> SemanticPlayState::SET_PIECE_NEUTRAL
+    INJURY_STOP     = 10,   // -> SemanticPlayState::INTERMISSION
+    VAR_REVIEW      = 11,   // -> SemanticPlayState::DEAD_BALL
+    FREE_KICK       = 12,   // -> SemanticPlayState::SET_PIECE_OFFENSE
+    CORNER_KICK     = 13,   // -> SemanticPlayState::SET_PIECE_OFFENSE
+    PENALTY_KICK    = 14,   // -> SemanticPlayState::SET_PIECE_OFFENSE
+    THROW_IN        = 15,   // -> SemanticPlayState::SET_PIECE_OFFENSE
+    LINEOUT         = 16,   // -> SemanticPlayState::SET_PIECE_DEFENSE
+    SCRUM           = 17,   // -> SemanticPlayState::SET_PIECE_NEUTRAL
+    FACEOFF         = 18,   // -> SemanticPlayState::SET_PIECE_NEUTRAL
+    JUMP_BALL       = 19,   // -> SemanticPlayState::SET_PIECE_NEUTRAL
+    POSSESSION      = 20,   // -> SemanticPlayState::LIVE_PLAY
+    INBOUND         = 21,   // -> SemanticPlayState::SET_PIECE_OFFENSE
+    KICKOFF_RECEIVE = 22,   // -> SemanticPlayState::SET_PIECE_NEUTRAL
+    EXTRA_POINT     = 23,   // -> SemanticPlayState::SET_PIECE_OFFENSE
+    TWO_POINT_CONV  = 24,   // -> SemanticPlayState::SET_PIECE_OFFENSE
+    PUNT_PLAY       = 25,   // -> SemanticPlayState::SET_PIECE_OFFENSE
+    FIELD_GOAL      = 26    // -> SemanticPlayState::SET_PIECE_OFFENSE
+};
+
+// =============================================================================
+// [LEGACY] FoulType — Sport-specific foul classification
+// =============================================================================
+// Retained for DisciplineSystem internal use.
+// AI layers should consume SemanticFoulConsequence instead.
 // =============================================================================
 enum class FoulType : uint8_t {
     NONE                = 0,
