@@ -81,8 +81,76 @@ bool SDL2Application::init(int width, int height) {
 // ---------------------------------------------------------------------------
 
 void SDL2Application::setup_vertical_slice() {
-    MatchConfig match_cfg;
+    MatchConfig match_cfg = MatchConfig::soccer_sandbox();
     app_.load_match(match_cfg);
+    // Mark first home athlete as human-controlled
+    const EntityManager& em = app_.scene.entity_manager;
+    if (em.athlete_count > 0 && em.athletes[0].id.is_valid()) {
+        app_.scene.assign_human(em.athletes[0].id);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 12.5: Hot-Swap between sports at runtime
+// ---------------------------------------------------------------------------
+// Tears down the current physics world and entities, wipes AI memory,
+// and rebuilds the scene with the specified sport configuration.
+//
+// The underlying load_match() calls unload() which:
+//   - Resets the EntityManager (all athletes + ball despawned)
+//   - Clears FormationSystem
+//   - Clears SportField + semantic zones
+//   - Resets scores, match time, possession state
+//   - Wipes AI controllers, UtilityAI actions, PerceptionBuffer, InfluenceMap
+//
+// Then it rebuilds everything: field geometry, semantic zones, teams, ball,
+// AI action injection (sport-specific), and considerations.
+// ---------------------------------------------------------------------------
+
+void SDL2Application::switch_sport(SportModuleType type) {
+    current_sport_ = type;
+
+    // 1. Pause the simulation during rebuild
+    bool was_paused = (app_.state == ApplicationState::PAUSED);
+    app_.request_pause();
+
+    // 2. Build the appropriate MatchConfig and load it
+    //    load_match() internally calls unload() first, guaranteeing clean teardown
+    MatchConfig match_cfg;
+    switch (type) {
+    case SportModuleType::BASKETBALL:
+        match_cfg = MatchConfig::basketball_sandbox();
+        break;
+    case SportModuleType::SOCCER:
+    default:
+        match_cfg = MatchConfig::soccer_sandbox();
+        break;
+    }
+
+    app_.load_match(match_cfg);
+
+    // 3. Mark first home athlete as human-controlled
+    const EntityManager& em = app_.scene.entity_manager;
+    if (em.athlete_count > 0 && em.athletes[0].id.is_valid()) {
+        app_.scene.assign_human(em.athletes[0].id);
+    }
+
+    // 4. Adjust camera zoom for the new field size
+    if (type == SportModuleType::BASKETBALL) {
+        camera_.zoom = 20.0f;  // Zoom in for 15x28m court
+    } else {
+        camera_.zoom = 5.5f;   // Zoom out for 68x105m pitch
+    }
+    camera_.center_x = 0.0f;
+    camera_.center_y = 0.0f;
+
+    // 5. Resume if was running
+    if (!was_paused) app_.request_resume();
+
+    std::printf("[APC SDL2] Switched to: %s (field %.0fx%.0fm, %u athletes)\n",
+                (type == SportModuleType::BASKETBALL) ? "Basketball" : "Soccer",
+                match_cfg.field_width, match_cfg.field_length,
+                app_.scene.entity_manager.athlete_count);
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +160,8 @@ void SDL2Application::setup_vertical_slice() {
 void SDL2Application::run() {
     if (!window_ || !renderer_) return;
 
-    setup_vertical_slice();
+    // Phase 12.5: Start with soccer by default (via switch_sport for consistency)
+    switch_sport(SportModuleType::SOCCER);
 
     Uint64 prev_ticks = SDL_GetPerformanceCounter();
     bool running = true;
@@ -160,6 +229,9 @@ void SDL2Application::process_events() {
                     app_.request_pause();
                 }
             }
+            // Phase 12.5: Hot-swap sport controls
+            if (event.key.keysym.sym == SDLK_1) switch_sport(SportModuleType::SOCCER);
+            if (event.key.keysym.sym == SDLK_2) switch_sport(SportModuleType::BASKETBALL);
             break;
 
         case SDL_MOUSEWHEEL:
@@ -461,13 +533,19 @@ void SDL2Application::draw_influence_map() {
 // ---------------------------------------------------------------------------
 
 void SDL2Application::draw_ground_grid() {
-    // Determine visible world range
-    float left   = camera_.center_x - (float)width_  / (2.0f * camera_.zoom);
-    float right  = camera_.center_x + (float)width_  / (2.0f * camera_.zoom);
-    float bottom = camera_.center_y - (float)height_ / (2.0f * camera_.zoom);
-    float top    = camera_.center_y + (float)height_ / (2.0f * camera_.zoom);
+    // Phase 12.5: Dispatch to sport-specific grid renderer
+    if (current_sport_ == SportModuleType::BASKETBALL) {
+        draw_ground_grid_basketball();
+    } else {
+        draw_ground_grid_soccer();
+    }
+}
 
-    // Field background (dark green)
+// ---------------------------------------------------------------------------
+// Drawing: Soccer field lines
+// ---------------------------------------------------------------------------
+
+void SDL2Application::draw_ground_grid_soccer() {
     float half_x = app_.scene.config.field_length * 0.5f;
     float half_z = app_.scene.config.field_width * 0.5f;
 
@@ -476,6 +554,7 @@ void SDL2Application::draw_ground_grid() {
     int fz1 = (int)camera_.world_to_screen_y(-half_z, height_);
     int fz2 = (int)camera_.world_to_screen_y( half_z, height_);
 
+    // Field background (dark green)
     SDL_SetRenderDrawColor(renderer_, 20, 40, 18, 255);
     SDL_Rect field_rect;
     field_rect.x = (fx1 < fx2) ? fx1 : fx2;
@@ -492,8 +571,8 @@ void SDL2Application::draw_ground_grid() {
     int cx = (int)camera_.world_to_screen_x(0.0f, width_);
     SDL_RenderDrawLine(renderer_, cx, fz1, cx, fz2);
 
-    // Center circle
-    float center_r = app_.scene.config.field_length * 0.5f * 0.087f; // ~9.15m
+    // Center circle (~9.15m radius)
+    float center_r = 9.15f;
     int cr_px = (int)camera_.world_to_screen_scale(center_r);
     int cy_px = (int)((fz1 + fz2) * 0.5f);
     if (cr_px > 2) {
@@ -508,28 +587,124 @@ void SDL2Application::draw_ground_grid() {
         }
     }
 
-    // Penalty area rectangles
+    // Penalty area rectangles (16.5m deep, 40.32m wide)
     float pa_depth = 16.5f;
-    float pa_width = 20.16f; // Half of 40.32m
+    float pa_hw    = 20.16f;
 
-    // Home penalty area
-    int pa_hx1 = (int)camera_.world_to_screen_x(-half_x, width_);
-    int pa_hx2 = (int)camera_.world_to_screen_x(-half_x + pa_depth, width_);
-    int pa_hz1 = (int)camera_.world_to_screen_y(-pa_width, height_);
-    int pa_hz2 = (int)camera_.world_to_screen_y( pa_width, height_);
     SDL_SetRenderDrawColor(renderer_, 55, 100, 45, 255);
+    // Home penalty area
     SDL_Rect pa_home;
-    pa_home.x = pa_hx1; pa_home.y = pa_hz1;
-    pa_home.w = pa_hx2 - pa_hx1; pa_home.h = pa_hz2 - pa_hz1;
+    pa_home.x = (int)camera_.world_to_screen_x(-half_x, width_);
+    pa_home.y = (int)camera_.world_to_screen_y(-pa_hw, height_);
+    pa_home.w = (int)camera_.world_to_screen_x(-half_x + pa_depth, width_) - pa_home.x;
+    pa_home.h = (int)camera_.world_to_screen_y(pa_hw, height_) - pa_home.y;
     SDL_RenderDrawRect(renderer_, &pa_home);
 
     // Away penalty area
-    int pa_ax1 = (int)camera_.world_to_screen_x(half_x - pa_depth, width_);
-    int pa_ax2 = (int)camera_.world_to_screen_x(half_x, width_);
     SDL_Rect pa_away;
-    pa_away.x = pa_ax1; pa_away.y = pa_hz1;
-    pa_away.w = pa_ax2 - pa_ax1; pa_away.h = pa_hz2 - pa_hz1;
+    pa_away.x = (int)camera_.world_to_screen_x(half_x - pa_depth, width_);
+    pa_away.y = (int)camera_.world_to_screen_y(-pa_hw, height_);
+    pa_away.w = (int)camera_.world_to_screen_x(half_x, width_) - pa_away.x;
+    pa_away.h = (int)camera_.world_to_screen_y(pa_hw, height_) - pa_away.y;
     SDL_RenderDrawRect(renderer_, &pa_away);
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Basketball court lines (Phase 12.5)
+// ---------------------------------------------------------------------------
+
+void SDL2Application::draw_ground_grid_basketball() {
+    float half_x = app_.scene.config.field_length * 0.5f;  // 14m
+    float half_z = app_.scene.config.field_width  * 0.5f;  // 7.5m
+
+    int fx1 = (int)camera_.world_to_screen_x(-half_x, width_);
+    int fx2 = (int)camera_.world_to_screen_x( half_x, width_);
+    int fz1 = (int)camera_.world_to_screen_y(-half_z, height_);
+    int fz2 = (int)camera_.world_to_screen_y( half_z, height_);
+
+    // Court background (warm wood tone — darker)
+    SDL_SetRenderDrawColor(renderer_, 40, 28, 18, 255);
+    SDL_Rect court_rect;
+    court_rect.x = (fx1 < fx2) ? fx1 : fx2;
+    court_rect.y = (fz1 < fz2) ? fz1 : fz2;
+    court_rect.w = (fx2 > fx1) ? (fx2 - fx1) : (fx1 - fx2);
+    court_rect.h = (fz2 > fz1) ? (fz2 - fz1) : (fz1 - fz2);
+    SDL_RenderFillRect(renderer_, &court_rect);
+
+    // Court outline (warm wood lines)
+    SDL_SetRenderDrawColor(renderer_, 180, 140, 80, 255);
+    SDL_RenderDrawRect(renderer_, &court_rect);
+
+    // Center line
+    int cx = (int)camera_.world_to_screen_x(0.0f, width_);
+    SDL_RenderDrawLine(renderer_, cx, fz1, cx, fz2);
+
+    // Center circle (1.83m radius — FIBA)
+    float center_r = 1.83f;
+    int cr_px = (int)camera_.world_to_screen_scale(center_r);
+    int cy_px = (int)((fz1 + fz2) * 0.5f);
+    if (cr_px > 1) {
+        static constexpr int CIRCLE_SEGMENTS = 24;
+        for (int i = 0; i < CIRCLE_SEGMENTS; ++i) {
+            float a1 = 2.0f * (float)APC_PI * i / CIRCLE_SEGMENTS;
+            float a2 = 2.0f * (float)APC_PI * (i + 1) / CIRCLE_SEGMENTS;
+            SDL_RenderDrawLine(renderer_,
+                cx + (int)(std::cos(a1) * cr_px), cy_px - (int)(std::sin(a1) * cr_px),
+                cx + (int)(std::cos(a2) * cr_px), cy_px - (int)(std::sin(a2) * cr_px)
+            );
+        }
+    }
+
+    // Paint/Lane rectangles (4.88m wide × 5.79m deep)
+    float lane_hw = 2.44f;  // Half of 4.88m
+    float lane_d  = 5.79f;   // Free-throw line distance
+
+    SDL_SetRenderDrawColor(renderer_, 160, 120, 60, 255);
+    // Home paint
+    SDL_Rect paint_home;
+    paint_home.x = (int)camera_.world_to_screen_x(-half_x, width_);
+    paint_home.y = (int)camera_.world_to_screen_y(-lane_hw, height_);
+    paint_home.w = (int)camera_.world_to_screen_x(-half_x + lane_d, width_) - paint_home.x;
+    paint_home.h = (int)camera_.world_to_screen_y(lane_hw, height_) - paint_home.y;
+    SDL_RenderDrawRect(renderer_, &paint_home);
+
+    // Away paint
+    SDL_Rect paint_away;
+    paint_away.x = (int)camera_.world_to_screen_x(half_x - lane_d, width_);
+    paint_away.y = (int)camera_.world_to_screen_y(-lane_hw, height_);
+    paint_away.w = (int)camera_.world_to_screen_x(half_x, width_) - paint_away.x;
+    paint_away.h = (int)camera_.world_to_screen_y(lane_hw, height_) - paint_away.y;
+    SDL_RenderDrawRect(renderer_, &paint_away);
+
+    // Three-point arcs (6.75m radius from basket center)
+    float arc_r = 6.75f;
+    int arc_px = (int)camera_.world_to_screen_scale(arc_r);
+    SDL_SetRenderDrawColor(renderer_, 140, 100, 50, 255);
+    if (arc_px > 2) {
+        static constexpr int ARC_SEGMENTS = 32;
+        // Home three-point arc (semicircle facing +X)
+        int arc_cx = (int)camera_.world_to_screen_x(-half_x, width_);
+        int arc_cy = cy_px;
+        for (int i = 0; i < ARC_SEGMENTS; ++i) {
+            // Arc from -90 to +90 degrees (right-facing semicircle)
+            float a1 = (float)APC_PI * (-0.5f + (float)i / ARC_SEGMENTS);
+            float a2 = (float)APC_PI * (-0.5f + (float)(i + 1) / ARC_SEGMENTS);
+            SDL_RenderDrawLine(renderer_,
+                arc_cx + (int)(std::cos(a1) * arc_px), arc_cy - (int)(std::sin(a1) * arc_px),
+                arc_cx + (int)(std::cos(a2) * arc_px), arc_cy - (int)(std::sin(a2) * arc_px)
+            );
+        }
+        // Away three-point arc (semicircle facing -X)
+        arc_cx = (int)camera_.world_to_screen_x(half_x, width_);
+        for (int i = 0; i < ARC_SEGMENTS; ++i) {
+            float a1 = (float)APC_PI * (0.5f + (float)i / ARC_SEGMENTS);
+            float a2 = (float)APC_PI * (0.5f + (float)(i + 1) / ARC_SEGMENTS);
+            SDL_RenderDrawLine(renderer_,
+                arc_cx + (int)(std::cos(a1) * arc_px), arc_cy - (int)(std::sin(a1) * arc_px),
+                arc_cx + (int)(std::cos(a2) * arc_px), arc_cy - (int)(std::sin(a2) * arc_px)
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -614,6 +789,20 @@ void SDL2Application::draw_hud() {
     time_bg.h = 20;
     SDL_RenderDrawRect(renderer_, &time_bg);
 
+    // Phase 12.5: Sport indicator (top-right, colored badge)
+    SDL_Rect sport_badge;
+    sport_badge.w = 14;
+    sport_badge.h = 14;
+    sport_badge.y = 13;
+    if (current_sport_ == SportModuleType::SOCCER) {
+        sport_badge.x = width_ - 110;
+        SDL_SetRenderDrawColor(renderer_, 50, 200, 50, 255);  // Green = Soccer
+    } else {
+        sport_badge.x = width_ - 110;
+        SDL_SetRenderDrawColor(renderer_, 255, 140, 0, 255);  // Orange = Basketball
+    }
+    SDL_RenderFillRect(renderer_, &sport_badge);
+
     // Pause indicator
     if (app_.state == ApplicationState::PAUSED) {
         SDL_SetRenderDrawColor(renderer_, 255, 60, 60, 255);
@@ -680,7 +869,7 @@ int main(int argc, char* argv[]) {
     (void)argv;
 
     std::printf("=== APC Physics Engine — Vertical Slice ===\n");
-    std::printf("Controls: Arrows=Pan, Scroll=Zoom, WASD=Player, Space=Pause, Esc=Quit\n\n");
+    std::printf("Controls: Arrows=Pan, Scroll=Zoom, WASD=Player, Space=Pause, 1=Soccer, 2=Basketball, Esc=Quit\n\n");
 
     apc::SDL2Application app;
 

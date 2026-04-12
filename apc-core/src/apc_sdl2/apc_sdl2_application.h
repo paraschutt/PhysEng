@@ -19,6 +19,7 @@
 //   Mouse wheel  — zoom in/out
 //   WASD        — control human player (Player 0)
 //   SPACE       — pause/resume
+//   1 / 2       — switch sport (Soccer / Basketball)
 //   ESC         — quit
 //
 // Cross-platform: Windows (MSVC/vcpkg), Linux (apt), macOS (brew)
@@ -74,6 +75,10 @@ public:
     /// Load the vertical slice scenario (soccer match with default config).
     void setup_vertical_slice();
 
+    /// Phase 12.5: Hot-swap between sports at runtime.
+    /// Tears down the current match and rebuilds with the specified sport.
+    void switch_sport(SportModuleType type);
+
     /// Run the main loop. Returns when the window is closed.
     void run();
 
@@ -89,6 +94,9 @@ private:
 
     // --- Input state ---
     const uint8_t* keys_ = nullptr;
+
+    // --- Current sport (Phase 12.5) ---
+    SportModuleType current_sport_ = SportModuleType::SOCCER;
 
     // --- THE CORE ENGINE ---
     apc::Application app_;
@@ -112,6 +120,10 @@ private:
     void draw_ground_grid();
     void draw_influence_map();
     void draw_hud();
+
+    // --- Sport-aware field rendering (Phase 12.5) ---
+    void draw_ground_grid_soccer();
+    void draw_ground_grid_basketball();
 
     void shutdown();
 };

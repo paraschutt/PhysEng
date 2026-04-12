@@ -277,3 +277,17 @@ add_test(NAME GameLoopIntegration COMMAND test_game_loop)
 add_executable(test_sprint28 correctness/test_sprint28.cpp)
 target_link_libraries(test_sprint28 PRIVATE apc_core)
 add_test(NAME Sprint28Correctness COMMAND test_sprint28)
+
+# ---------------------------------------------------------
+# Sprint 29 Tests — Collision Solver Unification: Mass-Ratio Fix
+# ---------------------------------------------------------
+add_executable(test_sprint29 integration/test_sprint29.cpp)
+target_link_libraries(test_sprint29 PRIVATE apc_core)
+add_test(NAME Sprint29MassRatioFix COMMAND test_sprint29)
+
+# ---------------------------------------------------------
+# Sprint 30 Tests — Phase 12.5: Multi-Sport Sandbox
+# ---------------------------------------------------------
+add_executable(test_sprint30 correctness/test_sprint30.cpp)
+target_link_libraries(test_sprint30 PRIVATE apc_core)
+add_test(NAME Sprint30MultiSportSandbox COMMAND test_sprint30)

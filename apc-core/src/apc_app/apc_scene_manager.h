@@ -89,6 +89,60 @@ struct MatchConfig {
     uint8_t       injuries_enabled    = 0;
     uint32_t      seed                = 42u; // Seed for deterministic variation
     float         position_jitter     = 3.0f; // Max meters of random offset per player
+
+    // =====================================================================
+    // Static factory methods — sport-specific match presets
+    // =====================================================================
+    // Phase 12.5: The Multi-Sport Sandbox. These presets provide the exact
+    // physical and semantic differences between Soccer and Basketball so the
+    // engine can rebuild the world on command via switch_sport().
+    //
+    // Soccer:  68x105m field, 11v11, 2 halves of 45 min, offside active
+    // Basketball: 15x28m court, 11v11 (engine-internal), 4 quarters, no offside
+    // =====================================================================
+
+    static MatchConfig soccer_sandbox()
+    {
+        MatchConfig cfg;
+        cfg.sport               = SportType::SOCCER;
+        cfg.match_duration_seconds = 5400.0f; // 90 minutes
+        cfg.halves              = 2;
+        cfg.half_duration       = 2700.0f;    // 45 min per half
+        cfg.players_per_team    = 11;
+        cfg.home_formation      = FormationType::FORMATION_4_4_2;
+        cfg.away_formation      = FormationType::FORMATION_4_4_2;
+        cfg.field_length        = 105.0f;     // Standard FIFA pitch
+        cfg.field_width         = 68.0f;
+        cfg.offside_enabled     = 1;
+        cfg.position_jitter     = 3.0f;
+        // Team names
+        const char* hn = "Home FC";
+        const char* an = "Away United";
+        for (uint32_t i = 0u; hn[i] && i < 31u; ++i) { cfg.home_team_name[i] = hn[i]; }
+        for (uint32_t i = 0u; an[i] && i < 31u; ++i) { cfg.away_team_name[i] = an[i]; }
+        return cfg;
+    }
+
+    static MatchConfig basketball_sandbox()
+    {
+        MatchConfig cfg;
+        cfg.sport               = SportType::BASKETBALL;
+        cfg.match_duration_seconds = 2400.0f; // 40 minutes (4 × 10 min quarters)
+        cfg.halves              = 4;
+        cfg.half_duration       = 600.0f;     // 10 min per quarter
+        cfg.players_per_team    = 5;          // Basketball 5v5 (capped by formation)
+        cfg.home_formation      = FormationType::FORMATION_4_4_2;
+        cfg.away_formation      = FormationType::FORMATION_4_4_2;
+        cfg.field_length        = 28.0f;      // FIBA half-court × 2 = full court
+        cfg.field_width         = 15.0f;      // Standard FIBA court width
+        cfg.offside_enabled     = 0;          // No offside in basketball
+        cfg.position_jitter     = 1.0f;       // Less jitter on smaller court
+        const char* hn = "Home Bears";
+        const char* an = "Away Wolves";
+        for (uint32_t i = 0u; hn[i] && i < 31u; ++i) { cfg.home_team_name[i] = hn[i]; }
+        for (uint32_t i = 0u; an[i] && i < 31u; ++i) { cfg.away_team_name[i] = an[i]; }
+        return cfg;
+    }
 };
 
 // =============================================================================
