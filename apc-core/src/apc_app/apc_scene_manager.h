@@ -279,7 +279,7 @@ struct SceneState {
     }
 
     // =========================================================================
-    // assign_human — Mark athlete as human-controlled
+    // assign_human — Mark athlete as human-controlled (updates bitmask)
     // =========================================================================
     void assign_human(EntityId athlete_id)
     {
@@ -287,6 +287,10 @@ struct SceneState {
         AthleteEntity* a = entity_manager.get_athlete(athlete_id);
         if (a) {
             a->is_human_controlled = 1;
+            a->controller = ControllerType::PLAYER;
+            // Update bitmasks: move from AI to human-controlled
+            entity_manager.clear_bit(entity_manager.mask_ai_controlled, athlete_id.index);
+            entity_manager.set_bit(entity_manager.mask_human_controlled, athlete_id.index);
         }
     }
 

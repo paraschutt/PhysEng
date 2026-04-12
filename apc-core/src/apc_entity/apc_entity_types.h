@@ -33,9 +33,20 @@ namespace apc {
 // =============================================================================
 // Capacity constants
 // =============================================================================
-static constexpr uint32_t MAX_ATHLETES = 44;   // 11 per team x 2 teams x 2 + referee
+static constexpr uint32_t MAX_ENTITIES = 256;  // Scaled up: 4 chunks of 64 bits
+static constexpr uint32_t CHUNK_COUNT  = MAX_ENTITIES / 64;
+static constexpr uint32_t MAX_ATHLETES = MAX_ENTITIES; // Up to 256 entities (crowds, expanded modes)
 static constexpr uint32_t MAX_BALLS    = 3;
 static constexpr uint32_t MAX_TEAMS    = 4;    // Main + extras for training
+
+// =============================================================================
+// ControllerType — Who controls an entity (used for bitmask queries)
+// =============================================================================
+enum class ControllerType : uint8_t {
+    AI     = 0,
+    PLAYER = 1,
+    NONE   = 2
+};
 
 // =============================================================================
 // EntityType — Classification of entity kinds
@@ -163,6 +174,9 @@ struct AthleteEntity {
     MotorIntent     previous_intent;
     uint16_t        flags = 0u; // MotorIntentFlags bitmask
 
+    // --- Controller type (used by EntityManager bitmask queries) ---
+    ControllerType  controller = ControllerType::AI;
+
     // --- Sport state ---
     float stamina        = 1.0f;  // 0.0-1.0
     float max_stamina    = 1.0f;
@@ -194,6 +208,7 @@ struct AthleteEntity {
         current_intent.reset();
         previous_intent.reset();
         flags           = 0u;
+        controller      = ControllerType::AI;
         stamina         = 1.0f;
         max_stamina     = 1.0f;
         health          = 1.0f;

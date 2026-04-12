@@ -21,6 +21,7 @@
 // =============================================================================
 
 #include "apc_sport/apc_sport_field.h"
+#include "apc_entity/apc_entity_types.h"
 #include <cstdint>
 #include <cmath>
 
@@ -245,7 +246,7 @@ struct DisciplineSystem {
     bool team_in_bonus[2] = {false, false};
 
     // Per-athlete tracking
-    static constexpr uint32_t MAX_ATHLETES = 64;
+    static constexpr uint32_t MAX_ATHLETES = MAX_ENTITIES; // 256 (bitmask-scaled)
     uint32_t athlete_fouls[MAX_ATHLETES];
     CardType athlete_cards[MAX_ATHLETES];
     uint32_t athlete_count = 0;

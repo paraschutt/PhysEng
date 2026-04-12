@@ -33,7 +33,7 @@ namespace apc {
 // =============================================================================
 // Capacity constants
 // =============================================================================
-static constexpr uint32_t MAX_AI_CONTROLLERS = 44;
+static constexpr uint32_t MAX_AI_CONTROLLERS = MAX_ENTITIES; // 256 (bitmask-scaled)
 
 // =============================================================================
 // AIMotorController — Converts steering output into MotorIntent

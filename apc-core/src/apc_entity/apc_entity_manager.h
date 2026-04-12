@@ -1,18 +1,23 @@
 #pragma once
 // =============================================================================
-// apc_entity_manager.h — Spawning, destruction, queries, and update for all entities
+// apc_entity_manager.h — Bitmask-driven entity management
 // =============================================================================
 //
 // Central manager for all game entities (athletes and balls):
 //
 //   - Spawn/destroy athletes and balls with generation-checked EntityIds
+//   - Bitmask state queries (SoA layout): active, human/AI controlled,
+//     ball carrier, team membership — all cache-friendly 64-bit chunks
+//   - O(1) lookup via __builtin_ctzll (count trailing zeros) instead of
+//     O(N) linear scans
+//   - Up to 256 entities (4 chunks of 64 bits)
 //   - Lookup by EntityId (generation check for stale references)
 //   - Team queries: count, find by role
 //   - Per-frame update: cooldowns, stamina drain
 //
 // Design:
 //   - Header-only, apc:: namespace
-//   - No dynamic allocation (fixed-size arrays with MAX_* constants)
+//   - No dynamic allocation (fixed-size arrays, bitmask state)
 //   - Deterministic: fixed-order iteration, no sqrt in distance comparisons
 //   - SlotMap-style indexing with generation counters
 //   - C++17
@@ -22,15 +27,26 @@
 #include "apc_entity/apc_entity_types.h"
 #include <cstdint>
 #include <cmath>
+#include <cassert>
+
+// Compiler compatibility for bit scan forward (count trailing zeros)
+#ifdef _MSC_VER
+#include <intrin.h>
+#define APC_CTZ64(x) _tzcnt_u64(x)
+#define APC_POPCOUNT64(x) __popcnt64(x)
+#else
+#define APC_CTZ64(x) __builtin_ctzll(x)
+#define APC_POPCOUNT64(x) __builtin_popcountll(x)
+#endif
 
 namespace apc {
 
 // =============================================================================
-// EntityManager — Central entity storage and query interface
+// EntityManager — Central entity storage and query interface (bitmask-driven)
 // =============================================================================
 struct EntityManager {
     // --- Data ---
-    AthleteEntity athletes[MAX_ATHLETES];
+    AthleteEntity athletes[MAX_ENTITIES];
     BallEntity    balls[MAX_BALLS];
     uint32_t      athlete_count = 0u;
     uint32_t      ball_count    = 0u;
@@ -38,30 +54,90 @@ struct EntityManager {
     uint32_t      next_ball_generation    = 0u;
 
     // =========================================================================
+    // Bitwise state masks (SoA layout for cache-friendly queries)
+    // =========================================================================
+    // Each mask is an array of 4 x uint64_t (CHUNK_COUNT = 4).
+    // Bit i in chunk c represents entity index (c * 64 + i).
+    uint64_t mask_active[CHUNK_COUNT]          = {};
+    uint64_t mask_human_controlled[CHUNK_COUNT] = {};
+    uint64_t mask_ai_controlled[CHUNK_COUNT]    = {};
+    uint64_t mask_ball_carrier[CHUNK_COUNT]     = {};
+    uint64_t mask_team_home[CHUNK_COUNT]        = {};
+    uint64_t mask_team_away[CHUNK_COUNT]        = {};
+
+    // =========================================================================
+    // Internal bitmask helpers
+    // =========================================================================
+
+    // Set bit in a mask array for a given entity index
+    APC_FORCEINLINE void set_bit(uint64_t* mask, uint32_t index) {
+        uint32_t chunk = index / 64;
+        uint32_t bit   = index % 64;
+        mask[chunk] |= (1ULL << bit);
+    }
+
+    // Clear bit in a mask array for a given entity index
+    APC_FORCEINLINE void clear_bit(uint64_t* mask, uint32_t index) {
+        uint32_t chunk = index / 64;
+        uint32_t bit   = index % 64;
+        mask[chunk] &= ~(1ULL << bit);
+    }
+
+    // Check bit in a mask array for a given entity index
+    APC_FORCEINLINE uint8_t test_bit(const uint64_t* mask, uint32_t index) const {
+        uint32_t chunk = index / 64;
+        uint32_t bit   = index % 64;
+        return (mask[chunk] & (1ULL << bit)) ? 1u : 0u;
+    }
+
+    // =========================================================================
     // Spawn / Destroy
     // =========================================================================
 
-    // --- Spawn an athlete into the first available slot ---
+    // --- Spawn an athlete into the first available slot (bitmask scan) ---
+    // Uses CTZ (count trailing zeros) to find the first 0-bit in mask_active,
+    // yielding O(1) slot allocation instead of O(N) linear scan.
     EntityId spawn_athlete(TeamId team, SportRole role, Vec3 position,
                            uint8_t jersey)
     {
-        for (uint32_t i = 0u; i < MAX_ATHLETES; ++i) {
-            AthleteEntity& a = athletes[i];
-            if (!a.id.is_valid()) {
+        // Find first available slot: first 0-bit in mask_active
+        for (uint32_t c = 0u; c < CHUNK_COUNT; ++c) {
+            uint64_t inverted = ~mask_active[c];
+            if (inverted != 0) {
+                uint32_t bit_idx = static_cast<uint32_t>(APC_CTZ64(inverted));
+                uint32_t entity_idx = (c * 64) + bit_idx;
+
+                // Activate bitmask state
+                set_bit(mask_active, entity_idx);
+
+                if (entity_idx >= athlete_count) {
+                    athlete_count = entity_idx + 1u;
+                }
+
                 ++next_athlete_generation;
+                AthleteEntity& a = athletes[entity_idx];
                 a.reset();
-                a.id.index      = i;
+                a.id.index      = entity_idx;
                 a.id.generation = next_athlete_generation;
                 a.team          = team;
                 a.role          = role;
                 a.position      = position;
                 a.jersey_number = jersey;
                 a.is_active     = 1;
-                a.unique_id     = compute_unique_id(team, role, jersey, i);
+                a.unique_id     = compute_unique_id(team, role, jersey, entity_idx);
 
-                if (i >= athlete_count) {
-                    athlete_count = i + 1u;
+                // Controller type: default AI (set to PLAYER later via assign_human)
+                a.controller = ControllerType::AI;
+                a.is_human_controlled = 0;
+                set_bit(mask_ai_controlled, entity_idx);
+
+                // Team masks
+                if (team == TEAM_HOME) {
+                    set_bit(mask_team_home, entity_idx);
+                } else if (team == TEAM_AWAY) {
+                    set_bit(mask_team_away, entity_idx);
                 }
+
                 return a.id;
             }
         }
@@ -91,15 +167,24 @@ struct EntityManager {
         return EntityId::make_invalid();
     }
 
-    // --- Destroy an entity by EntityId ---
+    // --- Destroy an entity by EntityId (clears all bitmask state in one sweep) ---
     uint8_t despawn(EntityId id)
     {
         // Try athletes
-        if (id.index < MAX_ATHLETES) {
+        if (id.index < MAX_ENTITIES) {
             AthleteEntity& a = athletes[id.index];
             if (a.id == id) {
                 a.id = EntityId::make_invalid();
                 a.is_active = 0;
+
+                // Clear ALL state bits in a single sweep
+                clear_bit(mask_active, id.index);
+                clear_bit(mask_human_controlled, id.index);
+                clear_bit(mask_ai_controlled, id.index);
+                clear_bit(mask_ball_carrier, id.index);
+                clear_bit(mask_team_home, id.index);
+                clear_bit(mask_team_away, id.index);
+
                 return 1;
             }
         }
@@ -115,10 +200,16 @@ struct EntityManager {
         return 0;
     }
 
-    // --- Clear all entities ---
+    // --- Destroy entity by index (alias for despawn, bitwise sweep) ---
+    void destroy_entity(EntityId id)
+    {
+        despawn(id);
+    }
+
+    // --- Clear all entities and bitmask state ---
     void reset()
     {
-        for (uint32_t i = 0u; i < MAX_ATHLETES; ++i) {
+        for (uint32_t i = 0u; i < MAX_ENTITIES; ++i) {
             athletes[i].reset();
         }
         for (uint32_t i = 0u; i < MAX_BALLS; ++i) {
@@ -128,6 +219,16 @@ struct EntityManager {
         ball_count    = 0u;
         next_athlete_generation = 0u;
         next_ball_generation    = 0u;
+
+        // Clear all bitmask state
+        for (uint32_t c = 0u; c < CHUNK_COUNT; ++c) {
+            mask_active[c]          = 0;
+            mask_human_controlled[c] = 0;
+            mask_ai_controlled[c]    = 0;
+            mask_ball_carrier[c]     = 0;
+            mask_team_home[c]        = 0;
+            mask_team_away[c]        = 0;
+        }
     }
 
     // =========================================================================
@@ -137,7 +238,7 @@ struct EntityManager {
     // --- Get athlete by EntityId (nullptr if invalid or generation mismatch) ---
     AthleteEntity* get_athlete(EntityId id)
     {
-        if (id.index >= MAX_ATHLETES) return nullptr;
+        if (id.index >= MAX_ENTITIES) return nullptr;
         AthleteEntity& a = athletes[id.index];
         if (a.id.generation != id.generation) return nullptr;
         if (!a.id.is_valid()) return nullptr;
@@ -146,7 +247,7 @@ struct EntityManager {
 
     const AthleteEntity* get_athlete(EntityId id) const
     {
-        if (id.index >= MAX_ATHLETES) return nullptr;
+        if (id.index >= MAX_ENTITIES) return nullptr;
         const AthleteEntity& a = athletes[id.index];
         if (a.id.generation != id.generation) return nullptr;
         if (!a.id.is_valid()) return nullptr;
@@ -208,7 +309,102 @@ struct EntityManager {
     }
 
     // =========================================================================
-    // Queries
+    // Bitmask Queries (O(1) or O(popcount) — no full-array iteration)
+    // =========================================================================
+
+    // --- O(1) query: find ball carrier on a given team using CTZ ---
+    // Uses bitwise AND to intersect mask_ball_carrier with the team mask,
+    // then CTZ to jump directly to the first set bit.
+    AthleteEntity* get_ball_carrier(TeamId team)
+    {
+        for (uint32_t c = 0u; c < CHUNK_COUNT; ++c) {
+            uint64_t target = mask_ball_carrier[c];
+            if (team == TEAM_HOME) {
+                target &= mask_team_home[c];
+            } else if (team == TEAM_AWAY) {
+                target &= mask_team_away[c];
+            }
+            if (target != 0) {
+                uint32_t bit_idx = static_cast<uint32_t>(APC_CTZ64(target));
+                uint32_t entity_idx = (c * 64) + bit_idx;
+                return &athletes[entity_idx];
+            }
+        }
+        return nullptr;
+    }
+
+    // --- Set ball carrier status for an entity ---
+    void set_ball_carrier(uint32_t entity_idx, uint8_t is_carrier)
+    {
+        if (is_carrier) {
+            set_bit(mask_ball_carrier, entity_idx);
+        } else {
+            clear_bit(mask_ball_carrier, entity_idx);
+        }
+    }
+
+    // --- Fast iteration over only active AI entities (bitwise) ---
+    // Uses iter_mask &= iter_mask - 1 to clear lowest set bit each loop,
+    // yielding O(popcount) iterations instead of O(MAX_ENTITIES).
+    template<typename Func>
+    void for_each_ai(Func callback)
+    {
+        for (uint32_t c = 0u; c < CHUNK_COUNT; ++c) {
+            uint64_t iter_mask = mask_active[c] & mask_ai_controlled[c];
+            while (iter_mask != 0) {
+                uint32_t bit_idx = static_cast<uint32_t>(APC_CTZ64(iter_mask));
+                callback(athletes[(c * 64) + bit_idx]);
+                iter_mask &= iter_mask - 1; // Clear the lowest set bit
+            }
+        }
+    }
+
+    // --- Fast iteration over all active entities (bitwise) ---
+    template<typename Func>
+    void for_each_active(Func callback)
+    {
+        for (uint32_t c = 0u; c < CHUNK_COUNT; ++c) {
+            uint64_t iter_mask = mask_active[c];
+            while (iter_mask != 0) {
+                uint32_t bit_idx = static_cast<uint32_t>(APC_CTZ64(iter_mask));
+                callback(athletes[(c * 64) + bit_idx]);
+                iter_mask &= iter_mask - 1;
+            }
+        }
+    }
+
+    // --- Fast iteration over active entities on a team (bitwise) ---
+    template<typename Func>
+    void for_each_team(TeamId team, Func callback)
+    {
+        for (uint32_t c = 0u; c < CHUNK_COUNT; ++c) {
+            uint64_t iter_mask = mask_active[c];
+            if (team == TEAM_HOME) {
+                iter_mask &= mask_team_home[c];
+            } else if (team == TEAM_AWAY) {
+                iter_mask &= mask_team_away[c];
+            }
+            while (iter_mask != 0) {
+                uint32_t bit_idx = static_cast<uint32_t>(APC_CTZ64(iter_mask));
+                callback(athletes[(c * 64) + bit_idx]);
+                iter_mask &= iter_mask - 1;
+            }
+        }
+    }
+
+    // --- O(CHUNK_COUNT) active entity count via POPCOUNT ---
+    // Uses hardware POPCOUNT instruction instead of iterating the array.
+    uint32_t get_active_count() const
+    {
+        uint32_t count = 0u;
+        for (uint32_t c = 0u; c < CHUNK_COUNT; ++c) {
+            count += static_cast<uint32_t>(APC_POPCOUNT64(mask_active[c]));
+        }
+        return count;
+    }
+
+    // =========================================================================
+    // Legacy Queries (kept for backward compatibility)
     // =========================================================================
 
     // --- Count athletes on a team ---

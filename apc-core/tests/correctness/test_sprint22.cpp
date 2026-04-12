@@ -24,7 +24,7 @@
 //   19. EntityManager get_team_athlete_count
 //   20. EntityManager reset clears everything
 //   21. EntityManager generation counter (spawn/despawn/respawn)
-//   22. MAX_ATHLETES capacity check (cannot exceed 44)
+//   22. MAX_ATHLETES capacity check (cannot exceed 256)
 //
 // Pattern: int main() + assert(), no test framework.
 // =============================================================================
@@ -874,43 +874,46 @@ static int test_max_athletes_capacity() {
     apc::EntityManager mgr;
     apc::Vec3 pos(0.0f, 0.0f, 0.0f);
 
-    assert(apc::MAX_ATHLETES == 44u && "MAX_ATHLETES = 44");
+    assert(apc::MAX_ATHLETES == 256u && "MAX_ATHLETES = 256");
     assert(apc::MAX_BALLS == 3u && "MAX_BALLS = 3");
 
-    // Spawn exactly 44 athletes
+    // Spawn exactly MAX_ATHLETES (256) athletes
     apc::EntityId ids[apc::MAX_ATHLETES];
     for (uint32_t i = 0; i < apc::MAX_ATHLETES; ++i) {
         ids[i] = mgr.spawn_athlete(
             (i % 2 == 0) ? apc::TEAM_HOME : apc::TEAM_AWAY,
             apc::SportRole::SOCCER_CM,
             apc::Vec3(static_cast<float>(i), 0.0f, 0.0f),
-            static_cast<uint8_t>(i + 1));
-        assert(ids[i].is_valid() && "All 44 spawns succeed");
+            static_cast<uint8_t>((i % 11) + 1));
+        assert(ids[i].is_valid() && "All 256 spawns succeed");
     }
 
-    assert(mgr.athlete_count == apc::MAX_ATHLETES && "athlete_count = 44");
-    assert(mgr.get_team_athlete_count(apc::TEAM_HOME) == 22u && "Home has 22");
-    assert(mgr.get_team_athlete_count(apc::TEAM_AWAY) == 22u && "Away has 22");
+    assert(mgr.athlete_count == apc::MAX_ATHLETES && "athlete_count = 256");
+    assert(mgr.get_team_athlete_count(apc::TEAM_HOME) == 128u && "Home has 128");
+    assert(mgr.get_team_athlete_count(apc::TEAM_AWAY) == 128u && "Away has 128");
 
-    // 45th spawn should fail
+    // 257th spawn should fail
     apc::EntityId overflow = mgr.spawn_athlete(
         apc::TEAM_HOME, apc::SportRole::SOCCER_CM, pos, 99);
-    assert(overflow.is_valid() == 0u && "45th spawn returns INVALID");
-    assert(overflow == apc::EntityId::make_invalid() && "45th = INVALID sentinel");
+    assert(overflow.is_valid() == 0u && "257th spawn returns INVALID");
+    assert(overflow == apc::EntityId::make_invalid() && "257th = INVALID sentinel");
 
     // athlete_count unchanged after failed spawn
-    assert(mgr.athlete_count == apc::MAX_ATHLETES && "Count still 44 after overflow");
+    assert(mgr.athlete_count == apc::MAX_ATHLETES && "Count still 256 after overflow");
 
-    // All 44 are still accessible
+    // All 256 are still accessible
     for (uint32_t i = 0; i < apc::MAX_ATHLETES; ++i) {
-        assert(mgr.get_athlete(ids[i]) != nullptr && "All 44 athletes accessible");
+        assert(mgr.get_athlete(ids[i]) != nullptr && "All 256 athletes accessible");
     }
 
     // Balls can still be spawned (separate pool)
     apc::EntityId ball1 = mgr.spawn_ball(0, pos);
     assert(ball1.is_valid() && "Ball spawn succeeds even with full athletes");
 
-    std::printf("    [PASS] 44 athletes fill capacity, 45th rejected, balls unaffected\n");
+    // Verify bitmask-based get_active_count matches
+    assert(mgr.get_active_count() == 256u && "get_active_count = 256");
+
+    std::printf("    [PASS] 256 athletes fill capacity, 257th rejected, balls unaffected\n");
     return 0;
 }
 
@@ -1109,17 +1112,19 @@ static int test_entity_id_is_valid_edge_cases() {
 static int test_capacity_constants() {
     std::printf("  [Test 28] Capacity constants...\n");
 
-    assert(apc::MAX_ATHLETES == 44u && "MAX_ATHLETES = 44");
+    assert(apc::MAX_ATHLETES == 256u && "MAX_ATHLETES = 256");
     assert(apc::MAX_BALLS == 3u && "MAX_BALLS = 3");
     assert(apc::MAX_TEAMS == 4u && "MAX_TEAMS = 4");
+    assert(apc::MAX_ENTITIES == 256u && "MAX_ENTITIES = 256");
+    assert(apc::CHUNK_COUNT == 4u && "CHUNK_COUNT = 4");
 
     // EntityManager arrays can hold exactly these counts
-    static_assert(sizeof(apc::EntityManager::athletes) / sizeof(apc::AthleteEntity) == apc::MAX_ATHLETES,
-                  "athletes array size matches MAX_ATHLETES");
+    static_assert(sizeof(apc::EntityManager::athletes) / sizeof(apc::AthleteEntity) == apc::MAX_ENTITIES,
+                  "athletes array size matches MAX_ENTITIES");
     static_assert(sizeof(apc::EntityManager::balls) / sizeof(apc::BallEntity) == apc::MAX_BALLS,
                   "balls array size matches MAX_BALLS");
 
-    std::printf("    [PASS] MAX_ATHLETES=44, MAX_BALLS=3, MAX_TEAMS=4 verified\n");
+    std::printf("    [PASS] MAX_ATHLETES=256, MAX_BALLS=3, MAX_TEAMS=4, CHUNK_COUNT=4 verified\n");
     return 0;
 }
 
