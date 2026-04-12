@@ -15,7 +15,7 @@
 //   7. CollisionShape AABB computation
 //   8. ContactManifold accumulation
 //   9. Collision filtering (layer/mask)
-//  10. Broadphase filter callback
+//  10. Broadphase pair generation (zero-alloc SAP)
 //  11. Asset loader (in-memory .apccol)
 //
 // All tests produce a state hash for cross-platform determinism verification.
@@ -347,34 +347,30 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // Test 12: Broadphase filter callback
+    // Test 12: Broadphase pair generation (zero-alloc SAP)
     // -----------------------------------------------------------------------
+    // Three overlapping AABBs at origin → C(3,2) = 3 pairs.
+    // Verifies the new insertion-sort SAP produces correct pair count and
+    // deterministic ordering with body_a_id < body_b_id normalization.
     {
-        BroadphaseSAP broadphase;
+        Broadphase broadphase;
+        broadphase.clear();
+        broadphase.add_aabb(0, { Vec3(-1, -1, -1), Vec3(1, 1, 1) });
+        broadphase.add_aabb(1, { Vec3(-1, -1, -1), Vec3(1, 1, 1) });
+        broadphase.add_aabb(2, { Vec3(-1, -1, -1), Vec3(1, 1, 1) });
+        broadphase.compute_pairs();
 
-        // Filter that skips pair (0, 2)
-        broadphase.filter_func = [](uint32_t a, uint32_t b, void*) -> bool {
-            // Skip if one of them is entity 2
-            if (a == 2 || b == 2) return false;
-            return true;
-        };
-
-        std::vector<BroadphaseSAP::Proxy> proxies = {
-            { 0, { { -1, -1, -1 }, { 1, 1, 1 } } },
-            { 1, { { -1, -1, -1 }, { 1, 1, 1 } } },
-            { 2, { { -1, -1, -1 }, { 1, 1, 1 } } },
-        };
-        broadphase.update(proxies);
-        broadphase.generate_pairs();
-
-        const auto& pairs = broadphase.get_potential_pairs();
-        // Without filter: (0,1), (0,2), (1,2) = 3 pairs
-        // With filter: (0,1) only = 1 pair (pairs with entity 2 are filtered)
-        bool ok = (pairs.size() == 1) && (pairs[0].id_a == 0) && (pairs[0].id_b == 1);
-        std::printf("[%s] Test 12: Broadphase filter callback (%zu pairs)\n",
-                     ok ? "PASS" : "FAIL", pairs.size());
+        const BroadphasePair* pairs = broadphase.get_pairs();
+        uint32_t pc = broadphase.get_pair_count();
+        // C(3,2) = 3 pairs: (0,1), (0,2), (1,2)
+        bool ok = (pc == 3)
+               && (pairs[0].body_a_id == 0 && pairs[0].body_b_id == 1)
+               && (pairs[1].body_a_id == 0 && pairs[1].body_b_id == 2)
+               && (pairs[2].body_a_id == 1 && pairs[2].body_b_id == 2);
+        std::printf("[%s] Test 12: Broadphase pair generation (%u pairs)\n",
+                     ok ? "PASS" : "FAIL", pc);
         if (ok) ++passed;
-        hash_uint(state_hash, static_cast<uint32_t>(pairs.size()));
+        hash_uint(state_hash, pc);
     }
 
     // -----------------------------------------------------------------------

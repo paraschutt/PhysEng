@@ -1,8 +1,5 @@
 #pragma once
 #include "apc_math/apc_vec3.h"
-#include "apc_containers/apc_flat_map.h"
-#include <vector>
-#include <algorithm>
 #include <cstdint>
 
 namespace apc {
@@ -13,128 +10,131 @@ struct AABB {
 };
 
 struct BroadphasePair {
-    uint32_t id_a;
-    uint32_t id_b; // Always guaranteed id_a < id_b
+    uint32_t body_a_id;
+    uint32_t body_b_id; // Always guaranteed body_a_id < body_b_id
 
     // Strict ordering for deterministic sorting/output
     bool operator<(const BroadphasePair& other) const {
-        if (id_a != other.id_a) return id_a < other.id_a;
-        return id_b < other.id_b;
+        if (body_a_id != other.body_a_id) return body_a_id < other.body_a_id;
+        return body_b_id < other.body_b_id;
     }
     bool operator==(const BroadphasePair& other) const {
-        return id_a == other.id_a && id_b == other.id_b;
+        return body_a_id == other.body_a_id && body_b_id == other.body_b_id;
     }
 };
 
-class BroadphaseSAP {
+class Broadphase {
 public:
-    struct Proxy {
-        uint32_t id;
+    // Fixed allocation budgets (Zero dynamic allocation)
+    static constexpr uint32_t MAX_BODIES = 256;
+    static constexpr uint32_t MAX_PAIRS = 4000;
+
+    struct SAPProxy {
+        uint32_t body_id;
+        float min_x;
+        float max_x;
         AABB aabb;
     };
 
-    // Collision filter function type
-    // Returns true if the pair should be tested for collision
-    using FilterFunc = bool (*)(uint32_t id_a, uint32_t id_b, void* user_data);
-    void* filter_user_data = nullptr;
-    FilterFunc filter_func = nullptr;
+private:
+    SAPProxy proxies[MAX_BODIES];
+    uint32_t proxy_count = 0;
 
-    void update(const std::vector<Proxy>& proxies) {
-        endpoints.clear();
-        endpoints.reserve(proxies.size() * 2);
+    BroadphasePair pairs[MAX_PAIRS];
+    uint32_t pair_count = 0;
 
-        for (const auto& p : proxies) {
-            endpoints.push_back({p.aabb.min.x, true, p.id});
-            endpoints.push_back({p.aabb.max.x, false, p.id});
-        }
+public:
+    void clear() {
+        proxy_count = 0;
+        pair_count = 0;
+    }
 
-        // DETERMINISM: std::stable_sort ensures identical order for equal x-values.
-        // If x-values are identical, it preserves the relative order of insertion.
-        std::stable_sort(endpoints.begin(), endpoints.end(), 
-            [](const Endpoint& a, const Endpoint& b) {
-                if (a.x != b.x) return a.x < b.x;
-                // If x is identical, min must come before max to avoid false self-intersection
-                if (a.is_min != b.is_min) return a.is_min;
-                // Final tie-breaker: Entity ID
-                return a.id < b.id;
-            });
-        
-        active_proxies = proxies;
-
-        // Build O(log N) lookup: proxy ID → AABB
-        aabb_lookup = FlatMap<uint32_t, AABB>{};
-        for (const auto& p : proxies) {
-            aabb_lookup.insert(p.id, p.aabb);
+    void add_aabb(uint32_t body_id, const AABB& bounds) {
+        if (proxy_count < MAX_BODIES) {
+            SAPProxy& p = proxies[proxy_count++];
+            p.body_id = body_id;
+            p.min_x   = bounds.min.x;
+            p.max_x   = bounds.max.x;
+            p.aabb    = bounds;
         }
     }
 
-    const std::vector<BroadphasePair>& get_potential_pairs() const {
-        return potential_pairs;
-    }
+    void compute_pairs() {
+        pair_count = 0;
+        if (proxy_count < 2) return;
 
-    // Generates pairs. O(N) assuming coherence.
-    void generate_pairs() {
-        potential_pairs.clear();
-        int active_count = 0;
-        uint32_t active_ids[512]; // Stack allocation for speed, max expected entities
+        // 1. Sort the proxies along the X-axis using Insertion Sort.
+        // This is O(N) for coherent frames where objects haven't moved much.
+        for (uint32_t i = 1; i < proxy_count; ++i) {
+            SAPProxy key = proxies[i];
+            int32_t j = static_cast<int32_t>(i) - 1;
 
-        for (const auto& ep : endpoints) {
-            if (ep.is_min) {
-                // Check overlap against all currently active IDs
-                for (int i = 0; i < active_count; ++i) {
-                    uint32_t id_a = active_ids[i];
-                    uint32_t id_b = ep.id;
-                    
-                    // Early out Y/Z overlap test
-                    const AABB& a = get_aabb(id_a);
-                    const AABB& b = get_aabb(id_b);
-                    
-                    if (a.max.y < b.min.y || a.min.y > b.max.y) continue;
-                    if (a.max.z < b.min.z || a.min.z > b.max.z) continue;
+            while (j >= 0 && proxies[j].min_x > key.min_x) {
+                proxies[j + 1] = proxies[j];
+                j--;
+            }
+            proxies[j + 1] = key;
+        }
 
-                    // DETERMINISM: Enforce id_a < id_b
-                    if (id_a > id_b) std::swap(id_a, id_b);
+        // 2. Sweep the sorted array to find overlapping pairs
+        for (uint32_t i = 0; i < proxy_count; ++i) {
+            const SAPProxy& left = proxies[i];
 
-                    // Apply collision filter if configured
-                    if (filter_func && !filter_func(id_a, id_b, filter_user_data)) continue;
-                    
-                    potential_pairs.push_back({id_a, id_b});
+            for (uint32_t j = i + 1; j < proxy_count; ++j) {
+                const SAPProxy& right = proxies[j];
+
+                // PRUNE: If the right object's min_x is greater than the left
+                // object's max_x, they cannot overlap. Since the array is sorted,
+                // no further objects in the inner loop can overlap with left either.
+                if (right.min_x > left.max_x) {
+                    break;
                 }
-                active_ids[active_count++] = ep.id;
-            } else {
-                // Remove from active set
-                for (int i = 0; i < active_count; ++i) {
-                    if (active_ids[i] == ep.id) {
-                        active_ids[i] = active_ids[active_count - 1];
-                        active_count--;
-                        break;
+
+                // If X overlaps, check Y and Z for full AABB intersection
+                if (test_aabb_overlap(left.aabb, right.aabb)) {
+                    if (pair_count < MAX_PAIRS) {
+                        // DETERMINISM: Enforce body_a_id < body_b_id ordering
+                        uint32_t a = left.body_id;
+                        uint32_t b = right.body_id;
+                        if (a > b) {
+                            uint32_t tmp = a;
+                            a = b;
+                            b = tmp;
+                        }
+                        pairs[pair_count++] = {a, b};
                     }
                 }
             }
         }
-        
-        // Sort output so solver processes in exact same order cross-platform
-        std::stable_sort(potential_pairs.begin(), potential_pairs.end());
+
+        // 3. Sort output pairs lexicographically so the solver processes in
+        // exact same order cross-platform (determinism guarantee).
+        insertion_sort_pairs();
     }
+
+    const BroadphasePair* get_pairs() const { return pairs; }
+    uint32_t get_pair_count() const { return pair_count; }
 
 private:
-    struct Endpoint {
-        float x;
-        bool is_min;
-        uint32_t id;
-    };
-
-    const AABB& get_aabb(uint32_t id) const {
-        const AABB* aabb = aabb_lookup.find(id);
-        if (aabb) return *aabb;
-        static AABB empty = {{0,0,0}, {0,0,0}};
-        return empty;
+    inline bool test_aabb_overlap(const AABB& a, const AABB& b) const {
+        return (a.min.x <= b.max.x && a.max.x >= b.min.x) &&
+               (a.min.y <= b.max.y && a.max.y >= b.min.y) &&
+               (a.min.z <= b.max.z && a.max.z >= b.min.z);
     }
 
-    std::vector<Endpoint> endpoints;
-    std::vector<BroadphasePair> potential_pairs;
-    std::vector<Proxy> active_proxies;
-    FlatMap<uint32_t, AABB> aabb_lookup; // proxy ID → AABB, O(log N) lookup
+    // Simple insertion sort for output pairs — already nearly sorted from the
+    // sweep, so this is effectively O(N) for typical frame-to-frame coherence.
+    void insertion_sort_pairs() {
+        for (uint32_t i = 1; i < pair_count; ++i) {
+            BroadphasePair key = pairs[i];
+            int32_t j = static_cast<int32_t>(i) - 1;
+            while (j >= 0 && pairs[j].body_a_id > key.body_a_id) {
+                pairs[j + 1] = pairs[j];
+                j--;
+            }
+            pairs[j + 1] = key;
+        }
+    }
 };
 
 } // namespace apc

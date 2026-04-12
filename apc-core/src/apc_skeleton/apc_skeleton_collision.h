@@ -192,13 +192,13 @@ public:
     const BoneProxy* get_proxies() const { return proxies_; }
 
     // -------------------------------------------------------------------------
-    // get_broadphase_proxies — Convert to BroadphaseSAP::Proxy format
+    // add_to_broadphase — Register all bone proxies with the broadphase system.
+    // Uses the zero-alloc Broadphase::add_aabb() API directly.
     // -------------------------------------------------------------------------
-    void get_broadphase_proxies(std::vector<BroadphaseSAP::Proxy>& out) const {
-        out.resize(proxy_count_);
+    void add_to_broadphase(Broadphase& bp) const {
         for (uint32_t i = 0; i < proxy_count_; ++i) {
-            out[i].id = make_global_id(proxies_[i].skeleton_id, proxies_[i].bone_index);
-            out[i].aabb = proxies_[i].aabb;
+            uint32_t gid = make_global_id(proxies_[i].skeleton_id, proxies_[i].bone_index);
+            bp.add_aabb(gid, proxies_[i].aabb);
         }
     }
 
@@ -375,38 +375,34 @@ public:
         skel_coll.update(0, asset, pose, bone_shapes, shape_count);
 
         // 2. Build broadphase proxies for all objects
-        std::vector<BroadphaseSAP::Proxy> skel_proxies;
-        skel_coll.get_broadphase_proxies(skel_proxies);
+        Broadphase broadphase;
+        broadphase.clear();
+        skel_coll.add_to_broadphase(broadphase);
 
-        std::vector<BroadphaseSAP::Proxy> all_proxies = skel_proxies;
         for (uint32_t i = 0; i < static_body_count; ++i) {
-            BroadphaseSAP::Proxy p;
-            p.id = static_body_ids[i];
-            p.aabb = static_bodies[i].get_aabb();
-            all_proxies.push_back(p);
+            broadphase.add_aabb(static_body_ids[i], static_bodies[i].get_aabb());
         }
 
-        // 3. Broadphase
-        BroadphaseSAP broadphase;
-        broadphase.update(all_proxies);
-        broadphase.generate_pairs();
+        // 3. Broadphase (insertion-sort SAP, zero dynamic allocation)
+        broadphase.compute_pairs();
 
         // 4. Narrowphase: detect collisions between bone proxies and static bodies
-        const std::vector<BroadphasePair>& pairs = broadphase.get_potential_pairs();
+        const BroadphasePair* bp_pairs = broadphase.get_pairs();
+        uint32_t bp_pair_count = broadphase.get_pair_count();
         std::vector<ContactManifold> manifolds;
 
-        for (uint32_t i = 0; i < pairs.size(); ++i) {
-            const BroadphasePair& pair = pairs[i];
-            uint32_t id_a = pair.id_a;
-            uint32_t id_b = pair.id_b;
+        for (uint32_t i = 0; i < bp_pair_count; ++i) {
+            const BroadphasePair& pair = bp_pairs[i];
+            uint32_t id_a = pair.body_a_id;
+            uint32_t id_b = pair.body_b_id;
 
             // Find shapes for both IDs
             CollisionShape shape_a, shape_b;
 
-            bool found_a = find_shape(skel_coll, skel_proxies,
+            bool found_a = find_shape(skel_coll,
                 static_bodies, static_body_ids, static_body_count,
                 id_a, shape_a);
-            bool found_b = find_shape(skel_coll, skel_proxies,
+            bool found_b = find_shape(skel_coll,
                 static_bodies, static_body_ids, static_body_count,
                 id_b, shape_b);
 
@@ -435,7 +431,6 @@ public:
 private:
     static bool find_shape(
         const SkeletonCollisionBody& skel_coll,
-        const std::vector<BroadphaseSAP::Proxy>& /*skel_proxies*/,
         const CollisionShape* static_bodies,
         const uint32_t* static_body_ids,
         uint32_t static_body_count,
