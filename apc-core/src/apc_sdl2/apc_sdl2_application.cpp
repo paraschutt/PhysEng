@@ -232,6 +232,13 @@ void SDL2Application::process_events() {
             // Phase 12.5: Hot-swap sport controls
             if (event.key.keysym.sym == SDLK_1) switch_sport(SportModuleType::SOCCER);
             if (event.key.keysym.sym == SDLK_2) switch_sport(SportModuleType::BASKETBALL);
+            // Phase 15 Action 1: Match flow controls
+            if (event.key.keysym.sym == SDLK_k) {
+                app_.scene.rules.current_state = SemanticPlayState::LIVE_PLAY;
+            }
+            if (event.key.keysym.sym == SDLK_l) {
+                app_.scene.rules.current_state = SemanticPlayState::DEAD_BALL;
+            }
             break;
 
         case SDL_MOUSEWHEEL:
@@ -803,6 +810,30 @@ void SDL2Application::draw_hud() {
     }
     SDL_RenderFillRect(renderer_, &sport_badge);
 
+    // Phase 15 Action 1: Play state indicator (color bar next to clock)
+    {
+        SDL_Rect state_bar;
+        state_bar.x = width_ / 2 - 55;
+        state_bar.y = 8;
+        state_bar.w = 8;
+        state_bar.h = 20;
+        switch (app_.scene.rules.current_state) {
+        case SemanticPlayState::LIVE_PLAY:
+            SDL_SetRenderDrawColor(renderer_, 50, 220, 50, 255);  // Green = live
+            break;
+        case SemanticPlayState::DEAD_BALL:
+            SDL_SetRenderDrawColor(renderer_, 220, 180, 40, 255);  // Yellow = dead ball
+            break;
+        case SemanticPlayState::INTERMISSION:
+            SDL_SetRenderDrawColor(renderer_, 220, 220, 220, 255); // White = intermission
+            break;
+        default:
+            SDL_SetRenderDrawColor(renderer_, 120, 120, 120, 255); // Grey = pre-game
+            break;
+        }
+        SDL_RenderFillRect(renderer_, &state_bar);
+    }
+
     // Pause indicator
     if (app_.state == ApplicationState::PAUSED) {
         SDL_SetRenderDrawColor(renderer_, 255, 60, 60, 255);
@@ -840,6 +871,26 @@ void SDL2Application::draw_hud() {
     zoom_bar.w = (int)(zoom_pct * 100.0f);
     zoom_bar.h = 8;
     SDL_RenderFillRect(renderer_, &zoom_bar);
+
+    // Phase 15 Action 1: Console clock readout (throttled to ~1 Hz)
+    {
+        static int frame_throttle = 0;
+        if (++frame_throttle >= 60) {
+            frame_throttle = 0;
+            int m = static_cast<int>(app_.scene.period_time_seconds) / 60;
+            int s = static_cast<int>(app_.scene.period_time_seconds) % 60;
+            const char* state_str = "PRE_GAME";
+            switch (app_.scene.rules.current_state) {
+            case SemanticPlayState::LIVE_PLAY:      state_str = "LIVE"; break;
+            case SemanticPlayState::DEAD_BALL:      state_str = "DEAD_BALL"; break;
+            case SemanticPlayState::INTERMISSION:   state_str = "INTERMISSION"; break;
+            default: break;
+            }
+            std::printf("\r[HUD] Period %u | %02d:%02d | %s          ",
+                        app_.scene.current_period, m, s, state_str);
+            std::fflush(stdout);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -869,7 +920,7 @@ int main(int argc, char* argv[]) {
     (void)argv;
 
     std::printf("=== APC Physics Engine — Vertical Slice ===\n");
-    std::printf("Controls: Arrows=Pan, Scroll=Zoom, WASD=Player, Space=Pause, 1=Soccer, 2=Basketball, Esc=Quit\n\n");
+    std::printf("Controls: Arrows=Pan, Scroll=Zoom, WASD=Player, Space=Pause, 1/2=Sport, K=Play, L=DeadBall, Esc=Quit\n\n");
 
     apc::SDL2Application app;
 

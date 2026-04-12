@@ -176,6 +176,16 @@ struct SceneState {
     // --- Match configuration ---
     MatchConfig      config;
 
+    // --- Match flow & clock state (Phase 15 Action 1) ---
+    // The referee / clock system. SemanticPlayState is only set by
+    // update_match_flow() or external hot-key triggers; the AI reads
+    // rules.current_state on its next perception tick to decide whether
+    // to chase the ball or hold position.
+    SportRulesConfig  rules;
+    uint32_t          current_period      = 1u;
+    float             period_time_seconds = 0.0f;
+    float             max_period_duration = 300.0f; // 5 min per half / quarter
+
     // --- Sport field with semantic zones (Phase 14 Action 1) ---
     // Populated by setup_field() during load_match(). Accessible at render
     // time for debug visualization and at AI time for spatial queries.
@@ -188,7 +198,7 @@ struct SceneState {
     uint8_t  is_loaded         = 0;
     uint32_t home_score        = 0u;
     uint32_t away_score        = 0u;
-    float    match_time_seconds = 0.0f;
+    float    match_time_seconds = 0.0f; // Global continuous tracker (only ticks during LIVE_PLAY)
 
     // --- Ball possession tracking ---
     EntityId  last_ball_toucher   = EntityId::make_invalid();
@@ -246,10 +256,14 @@ struct SceneState {
         formation_system.reset();
         field = SportField();
         config = MatchConfig();
-        is_loaded         = 0;
-        home_score        = 0u;
-        away_score        = 0u;
-        match_time_seconds = 0.0f;
+        is_loaded           = 0;
+        home_score          = 0u;
+        away_score          = 0u;
+        match_time_seconds  = 0.0f;
+        current_period      = 1u;
+        period_time_seconds = 0.0f;
+        max_period_duration = 300.0f;
+        rules               = SportRulesConfig();
         last_ball_toucher   = EntityId::make_invalid();
         last_possession_team = TEAM_NONE;
         possession_timer     = 0.0f;
@@ -1019,10 +1033,10 @@ struct SceneState {
     // =========================================================================
     void load_sport_configuration(const SportModuleConfig& module_config)
     {
-        // 1. Setup the Rules Engine (from Phase 11a Action 1)
-        //    The AI can query module_config.rules.current_state,
-        //    module_config.rules.offside_rule_active, etc.
-        (void)module_config; // Rules config stored for future AI queries
+        // 1. Store the Rules Engine (from Phase 11a Action 1)
+        //    The AI can query rules.current_state,
+        //    rules.offside_rule_active, etc.
+        rules = module_config.rules;
 
         // 2. Clear AI action memory for both teams
         utility_ai[0].clear_actions();
@@ -1434,6 +1448,40 @@ struct SceneState {
     }
 
     // =========================================================================
+    // update_match_flow — Referee / clock system (Phase 15 Action 1)
+    // =========================================================================
+    // The clock only advances during LIVE_PLAY. When the period expires,
+    // the state transitions to INTERMISSION automatically. The AI reads
+    // rules.current_state on its next perception tick and naturally stops
+    // chasing the ball (CHASE_BALL scores 0.0f during non-live states).
+    //
+    // The match_time_seconds counter is a global continuous tracker that
+    // only increments while the clock is running — this ensures accurate
+    // game time regardless of frame rate or physics micro-stutters.
+    // =========================================================================
+    void update_match_flow(float dt)
+    {
+        auto& state = rules.current_state;
+
+        if (state == SemanticPlayState::LIVE_PLAY) {
+            period_time_seconds += dt;
+            match_time_seconds  += dt;
+
+            // End of period detection
+            if (period_time_seconds >= max_period_duration) {
+                uint32_t total_periods = config.halves;
+                if (current_period >= total_periods) {
+                    // Full time — all periods played
+                    state = SemanticPlayState::INTERMISSION;
+                } else {
+                    // Between periods (half-time, quarter break, etc.)
+                    state = SemanticPlayState::INTERMISSION;
+                }
+            }
+        }
+    }
+
+    // =========================================================================
     // update — Main per-frame update (driven by Application::tick)
     // =========================================================================
     float game_loop_dt = 0.0f; // Set by Application::tick() before calling update()
@@ -1443,7 +1491,11 @@ struct SceneState {
         if (!is_loaded) return;
         game_loop_dt = dt;
 
-        // Step kinematics: motor intent -> velocity -> position
+        // 1. Tick the referee / clock logic
+        update_match_flow(dt);
+
+        // 2. Step kinematics: motor intent -> velocity -> position
+        //    (always ticks so bodies settle naturally, even during intermission)
         entity_manager.update_all(dt);
 
         // --- Clamp athletes to field boundary (with small margin) ---
@@ -1471,17 +1523,9 @@ struct SceneState {
             }
         }
 
-        // Update match time
-        match_time_seconds += dt;
-
-        // Check half time (uses match config directly)
-        if (config.halves > 0 && config.half_duration > 0.0f) {
-            float current_half = match_time_seconds / config.half_duration;
-            uint32_t half_index = static_cast<uint32_t>(current_half);
-            if (half_index > 0 && half_index >= config.halves) {
-                // Full time reached
-            }
-        }
+        // Note: match_time_seconds is now managed by update_match_flow()
+        // and only ticks during LIVE_PLAY. The old unconditional increment
+        // and empty half-time detection block were removed in Phase 15.
     }
 
     // =========================================================================
@@ -1489,9 +1533,12 @@ struct SceneState {
     // =========================================================================
     void reset_match()
     {
-        home_score        = 0u;
-        away_score        = 0u;
-        match_time_seconds = 0.0f;
+        home_score          = 0u;
+        away_score          = 0u;
+        match_time_seconds  = 0.0f;
+        current_period      = 1u;
+        period_time_seconds = 0.0f;
+        rules.current_state = SemanticPlayState::PRE_GAME;
         // Note: GameLoop reset is done by Application, not here.
 
         // Reset all athletes to initial positions

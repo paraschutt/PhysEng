@@ -291,3 +291,10 @@ add_test(NAME Sprint29MassRatioFix COMMAND test_sprint29)
 add_executable(test_sprint30 correctness/test_sprint30.cpp)
 target_link_libraries(test_sprint30 PRIVATE apc_core)
 add_test(NAME Sprint30MultiSportSandbox COMMAND test_sprint30)
+
+# ---------------------------------------------------------
+# Sprint 31 Tests — Phase 15 Action 1: Match State Machine & Clock
+# ---------------------------------------------------------
+add_executable(test_sprint31 correctness/test_sprint31.cpp)
+target_link_libraries(test_sprint31 PRIVATE apc_core)
+add_test(NAME Sprint31MatchClockManagement COMMAND test_sprint31)
