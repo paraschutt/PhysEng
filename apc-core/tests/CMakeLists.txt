@@ -270,3 +270,10 @@ add_test(NAME AISteeringIntegration COMMAND test_ai_steering)
 add_executable(test_game_loop integration/test_game_loop.cpp)
 target_link_libraries(test_game_loop PRIVATE apc_core)
 add_test(NAME GameLoopIntegration COMMAND test_game_loop)
+
+# ---------------------------------------------------------
+# Sprint 28 Tests — AI Hysteresis & Commitment Locking
+# ---------------------------------------------------------
+add_executable(test_sprint28 correctness/test_sprint28.cpp)
+target_link_libraries(test_sprint28 PRIVATE apc_core)
+add_test(NAME Sprint28Correctness COMMAND test_sprint28)
