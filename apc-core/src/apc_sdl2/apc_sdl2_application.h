@@ -101,7 +101,16 @@ private:
     // --- Drawing helpers ---
     void draw_circle(float world_x, float world_y, float world_radius,
                      uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255);
+    void draw_line(float wx1, float wy1, float wx2, float wy2,
+                   uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255);
+    void draw_rect_filled(float w_min_x, float w_min_y,
+                          float w_max_x, float w_max_y,
+                          uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255);
+    void draw_rect_wireframe(float w_min_x, float w_min_y,
+                             float w_max_x, float w_max_y,
+                             uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255);
     void draw_ground_grid();
+    void draw_influence_map();
     void draw_hud();
 
     void shutdown();

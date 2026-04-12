@@ -56,6 +56,18 @@ private:
 
 public:
     // =========================================================================
+    // Const grid accessors — read-only for visualization / debug overlay
+    // =========================================================================
+    APC_FORCEINLINE float get_threat(int32_t gx, int32_t gz) const {
+        return threat_grid[gx][gz];
+    }
+    APC_FORCEINLINE float get_control(int32_t gx, int32_t gz) const {
+        return control_grid[gx][gz];
+    }
+    APC_FORCEINLINE float get_field_ext_x() const { return field_ext_x; }
+    APC_FORCEINLINE float get_field_ext_z() const { return field_ext_z; }
+
+    // =========================================================================
     // initialize — Cache field dimensions for world <-> grid coordinate mapping
     // =========================================================================
     // Must be called once before inject_influence() or find_best_open_space().

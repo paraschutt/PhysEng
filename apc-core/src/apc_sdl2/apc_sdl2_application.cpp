@@ -9,6 +9,7 @@
 #include <SDL2/SDL.h>
 #include <cstdio>
 #include <cmath>
+#include <algorithm>
 
 namespace apc {
 
@@ -207,8 +208,12 @@ void SDL2Application::render() {
     SDL_SetRenderDrawColor(renderer_, 15, 15, 25, 255);
     SDL_RenderClear(renderer_);
 
-    // Field ground grid
+    // Field ground grid (soccer pitch lines)
     draw_ground_grid();
+
+    // --- Influence Map Overlay (Spatial Awareness) ---
+    // Red = threat (opponent presence), Blue = control (friendly presence)
+    draw_influence_map();
 
     // --- Draw Athletes from the real engine ---
     const EntityManager& em = app_.scene.entity_manager;
@@ -217,7 +222,7 @@ void SDL2Application::render() {
         const AthleteEntity& a = em.athletes[i];
         if (!a.id.is_valid() || !a.is_active) continue;
 
-        // Team 0 = Red, Team 1 = Blue, Human = Green tint
+        // Team coloring: Human = green, Home = red, Away = blue
         uint8_t r, g, b;
         if (a.is_human_controlled) {
             r = 50;  g = 255; b = 100; // Bright green for human
@@ -227,8 +232,18 @@ void SDL2Application::render() {
             r = 60;  g = 80;  b = 230;  // Away: blue
         }
 
-        // Draw athlete circle at world XZ position (projected onto XY plane)
+        // Draw athlete circle at world XZ position
         draw_circle(a.position.x, a.position.z, 0.45f, r, g, b, 255);
+
+        // Draw Motor Intent vector (where AI athletes want to move)
+        if (!a.is_human_controlled && a.current_intent.has_locomotion()) {
+            // Scale intent vector for visibility (3m line at full speed)
+            float intent_scale = 3.0f;
+            float end_x = a.position.x + a.current_intent.move_direction.x * intent_scale;
+            float end_z = a.position.z + a.current_intent.move_direction.z * intent_scale;
+            draw_line(a.position.x, a.position.z, end_x, end_z,
+                      255, 255, 0, 200); // Yellow intent vector
+        }
     }
 
     // --- Draw Ball from the real engine ---
@@ -287,6 +302,117 @@ void SDL2Application::draw_circle(float wx, float wy, float wr,
             (int)(sx + std::cos(a2) * sr),
             (int)(sy - std::sin(a2) * sr)
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Line (world-space, blended)
+// ---------------------------------------------------------------------------
+
+void SDL2Application::draw_line(float wx1, float wy1, float wx2, float wy2,
+                                 uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    int sx1 = (int)camera_.world_to_screen_x(wx1, width_);
+    int sy1 = (int)camera_.world_to_screen_y(wy1, height_);
+    int sx2 = (int)camera_.world_to_screen_x(wx2, width_);
+    int sy2 = (int)camera_.world_to_screen_y(wy2, height_);
+
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer_, r, g, b, a);
+    SDL_RenderDrawLine(renderer_, sx1, sy1, sx2, sy2);
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Filled Rectangle (world-space, blended)
+// ---------------------------------------------------------------------------
+
+void SDL2Application::draw_rect_filled(float w_min_x, float w_min_y,
+                                        float w_max_x, float w_max_y,
+                                        uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    int sx1 = (int)camera_.world_to_screen_x(w_min_x, width_);
+    int sy1 = (int)camera_.world_to_screen_y(w_max_y, height_); // Y-flip: max → top
+    int sx2 = (int)camera_.world_to_screen_x(w_max_x, width_);
+    int sy2 = (int)camera_.world_to_screen_y(w_min_y, height_); // Y-flip: min → bottom
+
+    SDL_Rect rect = { sx1, sy1, sx2 - sx1, sy2 - sy1 };
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer_, r, g, b, a);
+    SDL_RenderFillRect(renderer_, &rect);
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Wireframe Rectangle (world-space, blended)
+// ---------------------------------------------------------------------------
+
+void SDL2Application::draw_rect_wireframe(float w_min_x, float w_min_y,
+                                           float w_max_x, float w_max_y,
+                                           uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    int sx1 = (int)camera_.world_to_screen_x(w_min_x, width_);
+    int sy1 = (int)camera_.world_to_screen_y(w_max_y, height_);
+    int sx2 = (int)camera_.world_to_screen_x(w_max_x, width_);
+    int sy2 = (int)camera_.world_to_screen_y(w_min_y, height_);
+
+    SDL_Rect rect = { sx1, sy1, sx2 - sx1, sy2 - sy1 };
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer_, r, g, b, a);
+    SDL_RenderDrawRect(renderer_, &rect);
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Influence Map (Spatial Awareness Heatmap Overlay)
+// ---------------------------------------------------------------------------
+// Renders the AI's 32x16 dual-grid as a transparent overlay on the field.
+//   Red cells   = threat (opponent spatial influence)
+//   Blue cells  = control (friendly spatial influence)
+//
+// Cell intensity maps to alpha opacity (0.1 threshold to suppress noise).
+// Grid coordinates are converted back to world space using cached field extents.
+// ---------------------------------------------------------------------------
+
+void SDL2Application::draw_influence_map() {
+    const InfluenceMap& imap = app_.scene.influence_map;
+
+    float field_ext_x = imap.get_field_ext_x();
+    float field_ext_z = imap.get_field_ext_z();
+
+    // Skip if influence map hasn't been initialized (field_ext_x/z == 0)
+    if (field_ext_x <= 0.0f || field_ext_z <= 0.0f) return;
+
+    float half_ext_x = field_ext_x * 0.5f;
+    float half_ext_z = field_ext_z * 0.5f;
+
+    float cell_w = field_ext_x / (float)InfluenceMap::GRID_WIDTH;
+    float cell_h = field_ext_z / (float)InfluenceMap::GRID_HEIGHT;
+
+    for (int x = 0; x < InfluenceMap::GRID_WIDTH; ++x) {
+        for (int z = 0; z < InfluenceMap::GRID_HEIGHT; ++z) {
+            float threat  = imap.get_threat(x, z);
+            float control = imap.get_control(x, z);
+
+            // Skip near-zero cells to avoid filling the entire field with noise
+            if (threat < 0.1f && control < 0.1f) continue;
+
+            // Convert grid cell to world-space bounding box
+            float world_min_x = (float)x * cell_w - half_ext_x;
+            float world_min_z = (float)z * cell_h - half_ext_z;
+            float world_max_x = world_min_x + cell_w;
+            float world_max_z = world_min_z + cell_h;
+
+            // Render dominant layer: threat (red) takes priority over control (blue)
+            if (threat > control) {
+                uint8_t alpha = (uint8_t)std::min(threat * 50.0f, 150.0f);
+                draw_rect_filled(world_min_x, world_min_z,
+                                 world_max_x, world_max_z,
+                                 255, 50, 50, alpha);
+            } else {
+                uint8_t alpha = (uint8_t)std::min(control * 50.0f, 150.0f);
+                draw_rect_filled(world_min_x, world_min_z,
+                                 world_max_x, world_max_z,
+                                 50, 100, 255, alpha);
+            }
+        }
     }
 }
 
