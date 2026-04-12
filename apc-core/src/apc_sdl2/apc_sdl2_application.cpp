@@ -900,11 +900,26 @@ void SDL2Application::draw_hud() {
             case SemanticPlayState::INTERMISSION:   state_str = "INTERMISSION"; break;
             default: break;
             }
-            std::printf("\r[HUD] Period %u | %02d:%02d | %s | Score: %u - %u          ",
+            std::printf("\r[HUD] Period %u | %02d:%02d | %s | Score: %u - %u",
                         app_.scene.current_period, m, s, state_str,
                         app_.scene.home_score, app_.scene.away_score);
+
+            // Phase 16 Action 2: Shot clock readout
+            if (app_.scene.rules.possession_clock_max_ms > 0) {
+                std::printf(" | Shot Clock: %05.1f ", app_.scene.shot_clock_seconds);
+            }
+
+            std::printf("          ");
             std::fflush(stdout);
         }
+    }
+
+    // Phase 16 Action 2: Render Shot Clock HUD indicator (if active for this sport)
+    if (app_.scene.rules.possession_clock_max_ms > 0) {
+        // Draw a small red box beneath the main clock
+        SDL_Rect sc_bg = { width_ / 2 - 20, 40, 40, 20 };
+        SDL_SetRenderDrawColor(renderer_, 200, 40, 40, 255);
+        SDL_RenderFillRect(renderer_, &sc_bg);
     }
 }
 

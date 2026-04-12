@@ -312,3 +312,10 @@ add_test(NAME Sprint32ResetLogic COMMAND test_sprint32)
 add_executable(test_sprint33 correctness/test_sprint33.cpp)
 target_link_libraries(test_sprint33 PRIVATE apc_core)
 add_test(NAME Sprint33SpatialEventTriggers COMMAND test_sprint33)
+
+# ---------------------------------------------------------
+# Sprint 34 Tests — Phase 16 Action 2: Possession Tracking & Time Violations
+# ---------------------------------------------------------
+add_executable(test_sprint34 correctness/test_sprint34.cpp)
+target_link_libraries(test_sprint34 PRIVATE apc_core)
+add_test(NAME Sprint34PossessionTracking COMMAND test_sprint34)

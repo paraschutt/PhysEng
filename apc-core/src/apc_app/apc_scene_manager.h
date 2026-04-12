@@ -204,6 +204,14 @@ struct SceneState {
     // --- Rule & transition timers (Phase 16 Action 1) ---
     float post_event_timer = 0.0f; // Delay before resetting after a goal/OOB
 
+    // --- Macro Possession & Time Violations (Phase 16 Action 2) ---
+    // Tracks which team is on offense (attacking phase). The shot clock
+    // counts down against this team. If it reaches 0, a DEAD_BALL
+    // turnover is triggered. On a steal (possession_team changes),
+    // the clock resets for the new attacking team.
+    TeamId macro_possession_team = TEAM_NONE;
+    float  shot_clock_seconds    = 0.0f;
+
     // --- Ball possession tracking ---
     EntityId  last_ball_toucher   = EntityId::make_invalid();
     TeamId    last_possession_team = TEAM_NONE;
@@ -274,6 +282,8 @@ struct SceneState {
         ball_in_play         = 1u;
         out_of_bounds_timer  = 0.0f;
         post_event_timer     = 0.0f;
+        macro_possession_team = TEAM_NONE;
+        shot_clock_seconds    = 0.0f;
 
         for (uint32_t i = 0u; i < MAX_AI_CONTROLLERS; ++i) {
             ai_controllers[i].reset();
@@ -1172,12 +1182,51 @@ struct SceneState {
         // Inject sport-specific actions via load_sport_configuration
         SportModuleConfig module_config;
         switch (config.sport) {
-        case SportType::SOCCER:           module_config.module_type = SportModuleType::SOCCER; break;
-        case SportType::BASKETBALL:       module_config.module_type = SportModuleType::BASKETBALL; break;
-        case SportType::ICE_HOCKEY:       module_config.module_type = SportModuleType::HOCKEY; break;
-        case SportType::AMERICAN_FOOTBALL: module_config.module_type = SportModuleType::AMERICAN_FOOTBALL; break;
-        case SportType::RUGBY_UNION:      module_config.module_type = SportModuleType::RUGBY; break;
-        default:                          module_config.module_type = SportModuleType::SOCCER; break;
+        case SportType::SOCCER:
+            module_config.module_type = SportModuleType::SOCCER;
+            module_config.rules.feet_allowed_field = true;
+            module_config.rules.hands_allowed_field = false;
+            module_config.rules.offside_rule_active = true;
+            module_config.rules.allowed_contact_severity = 0.5f;
+            // No possession clock in soccer
+            module_config.rules.possession_clock_max_ms = 0;
+            break;
+        case SportType::BASKETBALL:
+            module_config.module_type = SportModuleType::BASKETBALL;
+            module_config.rules.feet_allowed_field = false;
+            module_config.rules.hands_allowed_field = true;
+            module_config.rules.offside_rule_active = false;
+            module_config.rules.allowed_contact_severity = 0.3f;
+            // 24-second shot clock
+            module_config.rules.possession_clock_max_ms = 24000;
+            break;
+        case SportType::ICE_HOCKEY:
+            module_config.module_type = SportModuleType::HOCKEY;
+            module_config.rules.feet_allowed_field = false;
+            module_config.rules.hands_allowed_field = false;
+            module_config.rules.allowed_contact_severity = 0.8f;
+            module_config.rules.possession_clock_max_ms = 0;
+            break;
+        case SportType::AMERICAN_FOOTBALL:
+            module_config.module_type = SportModuleType::AMERICAN_FOOTBALL;
+            module_config.rules.feet_allowed_field = true;
+            module_config.rules.hands_allowed_field = true;
+            module_config.rules.allowed_contact_severity = 1.0f;
+            module_config.rules.possession_clock_max_ms = 0;
+            break;
+        case SportType::RUGBY_UNION:
+            module_config.module_type = SportModuleType::RUGBY;
+            module_config.rules.feet_allowed_field = true;
+            module_config.rules.hands_allowed_field = true;
+            module_config.rules.allowed_contact_severity = 0.9f;
+            module_config.rules.possession_clock_max_ms = 0;
+            break;
+        default:
+            module_config.module_type = SportModuleType::SOCCER;
+            module_config.rules.feet_allowed_field = true;
+            module_config.rules.hands_allowed_field = false;
+            module_config.rules.possession_clock_max_ms = 0;
+            break;
         }
         load_sport_configuration(module_config);
 
@@ -1516,12 +1565,16 @@ std::printf("\n[REFEREE] Whistle! Ball is Out of Bounds.\n");
     // The clock only advances during LIVE_PLAY. When the period expires,
     // the state transitions to INTERMISSION automatically.
     //
-    // Phase 16 additions:
+    // Phase 16 Action 1 additions:
     //   - SCORING_EVENT and DEAD_BALL states now count down post_event_timer.
     //   - When the timer expires, formations are reset and the state drops to
     //     PRE_GAME, awaiting a [K] key press to resume live play.
     //   - During LIVE_PLAY, evaluate_spatial_rules() is called each frame to
     //     detect goal-scoring and out-of-bounds events from the ball's zone.
+    //
+    // Phase 16 Action 2 additions:
+    //   - Shot clock countdown during LIVE_PLAY.
+    //   - Shot clock violation → DEAD_BALL turnover.
     // =========================================================================
     void update_match_flow(float dt)
     {
@@ -1546,10 +1599,26 @@ std::printf("\n[REFEREE] Formations reset. Waiting for Kickoff...\n");
             period_time_seconds += dt;
             match_time_seconds  += dt;
 
-            // Constantly check if the ball triggered a spatial event
+            // 1. Constantly check if the ball triggered a spatial event
             evaluate_spatial_rules();
 
-            // End of period detection
+            // Stop processing flow if a spatial rule just triggered a dead ball
+            if (state != SemanticPlayState::LIVE_PLAY) return;
+
+            // 2. SHOT CLOCK / POSSESSION TIME ENFORCEMENT (Phase 16 Action 2)
+            if (rules.possession_clock_max_ms > 0 && macro_possession_team != TEAM_NONE) {
+                shot_clock_seconds -= dt;
+
+                if (shot_clock_seconds <= 0.0f) {
+std::printf("\n[REFEREE] Whistle! Shot Clock Violation by Team %d. Turnover.\n", macro_possession_team);
+                    state = SemanticPlayState::DEAD_BALL;
+                    post_event_timer = 2.0f; // Wait 2s, then reset
+                    macro_possession_team = TEAM_NONE;
+                    return;
+                }
+            }
+
+            // 3. End of period detection
             if (period_time_seconds >= max_period_duration) {
                 uint32_t total_periods = config.halves;
                 if (current_period >= total_periods) {
@@ -1578,7 +1647,39 @@ std::printf("\n[REFEREE] End of Period %u!\n", current_period);
         // 1. Tick the referee / clock logic
         update_match_flow(dt);
 
-        // 2. Step kinematics: motor intent -> velocity -> position
+        // 2. Ball possession tracking + macro-possession turnover detection
+        //    (Phase 16 Action 2: Shot Clock)
+        //    Only during LIVE_PLAY — AI ball interaction sets ball->possession_team.
+        if (rules.current_state == SemanticPlayState::LIVE_PLAY) {
+            BallEntity* ball = entity_manager.find_ball();
+            if (ball && ball->possession_team != TEAM_NONE) {
+
+                // TURNOVER DETECTION: If a different team claims the ball,
+                // reset the shot clock for the new attacking team.
+                if (macro_possession_team != ball->possession_team) {
+                    macro_possession_team = ball->possession_team;
+                    // Convert ms config to seconds
+                    shot_clock_seconds = rules.possession_clock_max_ms > 0
+                        ? (static_cast<float>(rules.possession_clock_max_ms) / 1000.0f)
+                        : 0.0f;
+std::printf("\n[REFEREE] Possession change! Shot clock reset to %.1fs.\n", shot_clock_seconds);
+                }
+
+                // Micro-possession update (existing Phase 12.5 logic)
+                last_possession_team = ball->possession_team;
+                possession_timer = POSSESSION_WINDOW;
+            } else if (possession_timer > 0.0f) {
+                possession_timer -= dt;
+                if (possession_timer <= 0.0f) {
+                    last_possession_team = TEAM_NONE;
+                    // Note: macro_possession_team INTENTIONALLY persists here.
+                    // The shot clock keeps ticking even if the ball is loose,
+                    // until the defense successfully secures it or it goes OOB.
+                }
+            }
+        }
+
+        // 3. Step kinematics: motor intent -> velocity -> position
         //    (always ticks so bodies settle naturally, even during intermission)
         entity_manager.update_all(dt);
 
@@ -1666,12 +1767,15 @@ std::printf("\n[REFEREE] End of Period %u!\n", current_period);
         }
 
         // 3. Clear scene-level possession tracking
-        last_ball_toucher   = EntityId::make_invalid();
+        last_ball_toucher    = EntityId::make_invalid();
         last_possession_team = TEAM_NONE;
         possession_timer     = 0.0f;
         ball_in_play         = 0u; // Ball not in play until next kickoff
         out_of_bounds_timer  = 0.0f;
         post_event_timer     = 0.0f;
+        // Phase 16 Action 2: Clear macro possession on a hard reset (Kickoff/Tip-off)
+        macro_possession_team = TEAM_NONE;
+        shot_clock_seconds    = 0.0f;
 
         // 4. Clear AI spatial memory so perception evaluates fresh layout
         perception_buffer.clear();
