@@ -122,6 +122,11 @@ struct SceneState {
     // --- Match configuration ---
     MatchConfig      config;
 
+    // --- Sport field with semantic zones (Phase 14 Action 1) ---
+    // Populated by setup_field() during load_match(). Accessible at render
+    // time for debug visualization and at AI time for spatial queries.
+    SportField       field;
+
     // --- Seed-driven PRNG for initial position jitter ---
     SeededXorShift32 rng;
 
@@ -152,8 +157,8 @@ struct SceneState {
         // Initialize seed-driven PRNG for position jitter
         rng = SeededXorShift32(config.seed);
 
-        // --- Configure game loop (done by Application, not here) ---
-        // The Application owns the single GameLoop that drives physics.
+        // --- Build the SportField with geometry + semantic zones ---
+        setup_field();
 
         // --- Set up formations ---
         formation_system.set_formation(config.home_formation, config.away_formation);
@@ -185,6 +190,7 @@ struct SceneState {
     {
         entity_manager.reset();
         formation_system.reset();
+        field = SportField();
         config = MatchConfig();
         is_loaded         = 0;
         home_score        = 0u;
@@ -259,6 +265,193 @@ struct SceneState {
         default: ball_type = 0; break;
         }
         entity_manager.spawn_ball(ball_type, Vec3(0.0f, 0.11f, 0.0f));
+    }
+
+    // =========================================================================
+    // setup_field — Initialize SportField geometry + semantic zones (Phase 14)
+    // =========================================================================
+    // Reads config.sport / config.field_length / config.field_width to build
+    // a SportField with proper geometry and semantic zone overlay.
+    //
+    // Semantic zones enable:
+    //   - AI spatial reasoning (RESTRICTED_DEFENSE penalty in influence map)
+    //   - Debug visualization (zone wireframes in SDL2 renderer)
+    //   - Rule enforcement (OUT_OF_BOUNDS detection)
+    //
+    // Currently supports: SOCCER, BASKETBALL, AMERICAN_FOOTBALL, RUGBY.
+    // Other sports get a generic NEUTRAL_PLAYING_FIELD + boundary zones.
+    // =========================================================================
+    void setup_field()
+    {
+        FieldGeometry geo;
+        geo.sport = config.sport;
+        geo.length = config.field_length;
+        geo.width  = config.field_width;
+
+        switch (config.sport) {
+        case SportType::SOCCER:
+            geo.name              = "soccer";
+            geo.center_radius     = 9.15f;
+            geo.goal_width        = 7.32f;
+            geo.goal_height       = 2.44f;
+            geo.goal_depth        = 2.0f;
+            geo.penalty_area_width = 40.32f;
+            geo.penalty_area_depth = 16.5f;
+            geo.goal_area_width   = 18.32f;
+            geo.goal_area_depth   = 5.5f;
+            break;
+
+        case SportType::BASKETBALL:
+            geo.name              = "basketball";
+            geo.center_radius     = 1.83f;  // 6ft center circle
+            geo.goal_width        = 0.457f; // 18-inch rim diameter
+            geo.goal_height       = 3.05f;  // 10ft rim height
+            geo.goal_depth        = 0.0f;
+            geo.penalty_area_width = 4.88f;  // 16ft lane width
+            geo.penalty_area_depth = 5.79f;  // 19ft free-throw distance
+            geo.goal_area_width   = 0.0f;
+            geo.goal_area_depth   = 0.0f;
+            break;
+
+        case SportType::AMERICAN_FOOTBALL:
+            geo.name              = "american_football";
+            geo.center_radius     = 0.0f;
+            geo.goal_width        = 5.64f;  // 18ft 6in goal width
+            geo.goal_height       = 3.05f;
+            geo.goal_depth        = 0.0f;
+            geo.penalty_area_width = 0.0f;
+            geo.penalty_area_depth = 0.0f;
+            geo.goal_area_width   = 0.0f;
+            geo.goal_area_depth   = 0.0f;
+            break;
+
+        case SportType::RUGBY_UNION:
+            geo.name              = "rugby";
+            geo.center_radius     = 0.0f;
+            geo.goal_width        = 5.6f;
+            geo.goal_height       = 3.0f;
+            geo.goal_depth        = 0.0f;
+            geo.penalty_area_width = 22.0f;  // 22m in-goal width
+            geo.penalty_area_depth = 22.0f;
+            geo.goal_area_width   = 0.0f;
+            geo.goal_area_depth   = 0.0f;
+            break;
+
+        default:
+            geo.name = "generic";
+            geo.center_radius = 5.0f;
+            geo.goal_width    = 7.0f;
+            geo.goal_height   = 2.5f;
+            geo.goal_depth    = 1.5f;
+            break;
+        }
+
+        field.setup(geo);
+
+        // --- Build semantic zones based on sport geometry ---
+        float half_l = geo.length * 0.5f;
+        float half_w = geo.width  * 0.5f;
+
+        // OUT_OF_BOUNDS: perimeter strip around the field
+        float bw = geo.boundary_width;
+        field.add_semantic_zone(ZoneSemantic::OUT_OF_BOUNDS,
+            Vec3(-half_l - bw, 0.0f, -half_w - bw),
+            Vec3(half_l + bw,    0.0f, -half_w));
+        field.add_semantic_zone(ZoneSemantic::OUT_OF_BOUNDS,
+            Vec3(-half_l - bw, 0.0f,  half_w),
+            Vec3(half_l + bw,    0.0f,  half_w + bw));
+        field.add_semantic_zone(ZoneSemantic::OUT_OF_BOUNDS,
+            Vec3(-half_l - bw, 0.0f, -half_w),
+            Vec3(-half_l,       0.0f,  half_w));
+        field.add_semantic_zone(ZoneSemantic::OUT_OF_BOUNDS,
+            Vec3(half_l,        0.0f, -half_w),
+            Vec3(half_l + bw,   0.0f,  half_w));
+
+        // Sport-specific semantic zones
+        switch (config.sport) {
+        case SportType::SOCCER: {
+            float pa_hw = geo.penalty_area_width * 0.5f;
+            float pa_d  = geo.penalty_area_depth;
+            float ga_hw = geo.goal_area_width * 0.5f;
+            float ga_d  = geo.goal_area_depth;
+            float gw    = geo.goal_width * 0.5f;
+            float gd    = geo.goal_depth;
+
+            // Home penalty area
+            field.add_semantic_zone(ZoneSemantic::RESTRICTED_DEFENSE,
+                Vec3(-half_l, 0.0f, -pa_hw),
+                Vec3(-half_l + pa_d, 0.0f, pa_hw));
+            // Away penalty area
+            field.add_semantic_zone(ZoneSemantic::RESTRICTED_DEFENSE,
+                Vec3(half_l - pa_d, 0.0f, -pa_hw),
+                Vec3(half_l,        0.0f, pa_hw));
+            // Home goal area (6-yard box)
+            field.add_semantic_zone(ZoneSemantic::RESTRICTED_DEFENSE,
+                Vec3(-half_l, 0.0f, -ga_hw),
+                Vec3(-half_l + ga_d, 0.0f, ga_hw));
+            // Away goal area
+            field.add_semantic_zone(ZoneSemantic::RESTRICTED_DEFENSE,
+                Vec3(half_l - ga_d, 0.0f, -ga_hw),
+                Vec3(half_l,        0.0f, ga_hw));
+            // Home goal
+            field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
+                Vec3(-half_l - gd, 0.0f, -gw),
+                Vec3(-half_l,       0.0f, gw));
+            // Away goal
+            field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
+                Vec3(half_l,        0.0f, -gw),
+                Vec3(half_l + gd,   0.0f, gw));
+            break;
+        }
+        case SportType::BASKETBALL: {
+            float lane_hw = geo.penalty_area_width * 0.5f;
+            float lane_d  = geo.penalty_area_depth;
+
+            // Home paint (restricted defense)
+            field.add_semantic_zone(ZoneSemantic::RESTRICTED_DEFENSE,
+                Vec3(-half_l, 0.0f, -lane_hw),
+                Vec3(-half_l + lane_d, 0.0f, lane_hw));
+            // Away paint
+            field.add_semantic_zone(ZoneSemantic::RESTRICTED_DEFENSE,
+                Vec3(half_l - lane_d, 0.0f, -lane_hw),
+                Vec3(half_l,          0.0f, lane_hw));
+            // Home hoop
+            field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
+                Vec3(-half_l - 0.5f, 0.0f, -geo.goal_width * 0.5f),
+                Vec3(-half_l,         0.0f,  geo.goal_width * 0.5f));
+            // Away hoop
+            field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
+                Vec3(half_l,          0.0f, -geo.goal_width * 0.5f),
+                Vec3(half_l + 0.5f,   0.0f,  geo.goal_width * 0.5f));
+            break;
+        }
+        case SportType::AMERICAN_FOOTBALL: {
+            float gw = geo.goal_width * 0.5f;
+            // Home endzone
+            field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
+                Vec3(-half_l - 10.0f, 0.0f, -half_w),
+                Vec3(-half_l,         0.0f,  half_w));
+            // Away endzone
+            field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
+                Vec3(half_l,           0.0f, -half_w),
+                Vec3(half_l + 10.0f,  0.0f,  half_w));
+            break;
+        }
+        case SportType::RUGBY_UNION: {
+            float try_d = geo.penalty_area_depth;
+            // Home try zone (in-goal area)
+            field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
+                Vec3(-half_l - try_d, 0.0f, -half_w),
+                Vec3(-half_l,         0.0f,  half_w));
+            // Away try zone
+            field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
+                Vec3(half_l,           0.0f, -half_w),
+                Vec3(half_l + try_d,   0.0f,  half_w));
+            break;
+        }
+        default:
+            break;
+        }
     }
 
     // =========================================================================

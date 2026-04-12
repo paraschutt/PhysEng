@@ -211,6 +211,46 @@ void SDL2Application::render() {
     // Field ground grid (soccer pitch lines)
     draw_ground_grid();
 
+    // --- Semantic Zone Overlay (Phase 14 Action 1) ---
+    // Render SportField semantic zones as colored wireframes + faint fills.
+    // This allows visual verification that AI spatial queries align with
+    // the actual field geometry (critical for RESTRICTED_DEFENSE, SCORING_TARGET).
+    {
+        const SportField& sf = app_.scene.field;
+        for (uint32_t i = 0u; i < sf.semantic_zone_count; ++i) {
+            const SemanticFieldZone& zone = sf.semantic_zones[i];
+
+            // Skip OUT_OF_BOUNDS zones — they clutter the view beyond the pitch
+            if (zone.semantic == ZoneSemantic::OUT_OF_BOUNDS) continue;
+
+            uint8_t r = 200, g = 200, b = 200;
+            switch (zone.semantic) {
+            case ZoneSemantic::RESTRICTED_DEFENSE:
+                r = 255; g = 140; b = 0;   // Orange — Penalty Box / Paint
+                break;
+            case ZoneSemantic::RESTRICTED_OFFENSE:
+                r = 255; g = 50;  b = 50;  // Red — Offensive restricted
+                break;
+            case ZoneSemantic::SCORING_TARGET:
+                r = 255; g = 255; b = 0;   // Yellow — Goal / Hoop / Endzone
+                break;
+            case ZoneSemantic::NEUTRAL_PLAYING_FIELD:
+                r = 50;  g = 200; b = 50;  // Green — General playing area
+                break;
+            default: break;
+            }
+
+            // Wireframe boundary
+            draw_rect_wireframe(zone.min_bounds.x, zone.min_bounds.z,
+                                zone.max_bounds.x, zone.max_bounds.z,
+                                r, g, b, 100);
+            // Faint interior fill for volume indication
+            draw_rect_filled(zone.min_bounds.x, zone.min_bounds.z,
+                             zone.max_bounds.x, zone.max_bounds.z,
+                             r, g, b, 20);
+        }
+    }
+
     // --- Influence Map Overlay (Spatial Awareness) ---
     // Red = threat (opponent presence), Blue = control (friendly presence)
     draw_influence_map();
