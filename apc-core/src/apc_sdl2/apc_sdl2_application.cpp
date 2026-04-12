@@ -1,6 +1,8 @@
 // =============================================================================
 // APC SDL2 Visualizer — Implementation
 // =============================================================================
+// Phase 12 Action 2: Pure rendering/input shell for apc::Application.
+// =============================================================================
 
 #include "apc_sdl2_application.h"
 
@@ -34,7 +36,7 @@ bool SDL2Application::init(int width, int height) {
     }
 
     window_ = SDL_CreateWindow(
-        "APC Physics Engine — SDL2 Visualizer",
+        "APC Physics Engine — Vertical Slice",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         width_, height_,
         SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
@@ -47,121 +49,39 @@ bool SDL2Application::init(int width, int height) {
 
     renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
     if (!renderer_) {
-        std::fprintf(stderr, "[APC SDL2] SDL_CreateRenderer failed: %s\n", SDL_GetError());
-        // Fall back to software renderer
+        std::fprintf(stderr, "[APC SDL2] Hardware renderer failed, trying software\n");
         renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_SOFTWARE);
         if (!renderer_) {
-            std::fprintf(stderr, "[APC SDL2] Software renderer also failed: %s\n", SDL_GetError());
+            std::fprintf(stderr, "[APC SDL2] SDL_CreateRenderer failed: %s\n", SDL_GetError());
             shutdown();
             return false;
         }
     }
 
-    SDL_RendererInfo renderer_info;
-    SDL_GetRendererInfo(renderer_, &renderer_info);
-    std::printf("[APC SDL2] Initialized: %dx%d window, %s renderer\n",
-                width_, height_,
-                (renderer_info.flags & SDL_RENDERER_ACCELERATED)
-                    ? "hardware" : "software");
+    // Bootstrap the core engine with application defaults
+    ApplicationConfig cfg = Application::soccer_defaults();
+    cfg.window_width = static_cast<uint32_t>(width_);
+    cfg.window_height = static_cast<uint32_t>(height_);
+    app_.init(cfg);
+
+    // Center camera on midfield
+    camera_.center_x = 0.0f;
+    camera_.center_y = 0.0f;
+    camera_.zoom = 5.5f; // ~5.5 px/m shows most of the 105m field
+
+    std::printf("[APC SDL2] Initialized: %dx%d window, engine ready\n",
+                width_, height_);
 
     return true;
 }
 
 // ---------------------------------------------------------------------------
-// Demo Scene Setup
+// Vertical Slice Scenario Setup
 // ---------------------------------------------------------------------------
 
-void SDL2Application::setup_demo_scene() {
-    entities_.clear();
-    solver_.clear();
-    sim_time_ = 0.0f;
-
-    // Solver configuration
-    solver_.friction_coefficient = 0.4f;
-    solver_.baumgarte_factor     = 0.2f;
-    solver_.baumgarte_slop       = 0.005f;
-    solver_.restitution          = 0.5f;  // Bouncy for visual interest
-    solver_.velocity_iterations  = 8;
-    solver_.linear_damping       = 0.999f;
-    solver_.angular_damping      = 0.998f;
-
-    // Ground plane at y = 0, normal pointing up
-    ground_plane_ = CollisionShape::make_plane(
-        Vec3(0.0f, 0.0f, 0.0f),
-        Vec3(0.0f, 1.0f, 0.0f)
-    );
-
-    // --- Create bouncing spheres in a grid pattern ---
-    struct SphereDef {
-        float x, y, z, r, mass;
-        uint8_t cr, cg, cb;
-    };
-
-    SphereDef defs[] = {
-        // Row 1 — large spheres
-        { -4.0f,  8.0f, 0.0f,  0.5f, 1.0f,  230,  70,  70 },   // Red
-        { -2.0f, 10.0f, 0.0f,  0.5f, 1.0f,  70,  180,  70 },   // Green
-        {  0.0f, 12.0f, 0.0f,  0.5f, 1.0f,  70,  70, 230 },   // Blue
-        {  2.0f, 10.0f, 0.0f,  0.5f, 1.0f, 230, 180,  70 },   // Orange
-        {  4.0f,  8.0f, 0.0f,  0.5f, 1.0f, 180,  70, 230 },   // Purple
-
-        // Row 2 — medium spheres
-        { -3.0f, 15.0f, 0.0f,  0.35f, 0.5f, 230, 130, 130 },  // Light red
-        { -1.0f, 18.0f, 0.0f,  0.35f, 0.5f, 130, 230, 130 },  // Light green
-        {  1.0f, 20.0f, 0.0f,  0.35f, 0.5f, 130, 130, 230 },  // Light blue
-        {  3.0f, 15.0f, 0.0f,  0.35f, 0.5f, 230, 230, 100 },  // Yellow
-
-        // Row 3 — small spheres
-        { -5.0f, 22.0f, 0.0f,  0.2f, 0.2f, 200, 200, 200 },  // White
-        { -3.5f, 25.0f, 0.0f,  0.2f, 0.2f, 255, 150, 200 },  // Pink
-        { -2.0f, 28.0f, 0.0f,  0.2f, 0.2f, 100, 255, 255 },  // Cyan
-        {  2.0f, 28.0f, 0.0f,  0.2f, 0.2f, 255, 255, 150 },  // Light yellow
-        {  3.5f, 25.0f, 0.0f,  0.2f, 0.2f, 150, 200, 255 },  // Sky
-        {  5.0f, 22.0f, 0.0f,  0.2f, 0.2f, 200, 255, 200 },  // Mint
-
-        // Some off-center for asymmetry
-        { -6.0f, 14.0f, 0.0f,  0.4f, 0.8f, 180, 100,  50 },  // Brown
-        {  6.0f, 14.0f, 0.0f,  0.4f, 0.8f,  50, 100, 180 },  // Navy
-
-        // A couple of spheres with initial lateral velocity
-        { -7.0f, 20.0f, 0.0f,  0.3f, 0.4f, 255, 100, 100 },  // Moving right
-        {  7.0f, 20.0f, 0.0f,  0.3f, 0.4f, 100, 100, 255 },  // Moving left
-    };
-
-    for (const auto& d : defs) {
-        RenderEntity e;
-        e.body.position = Vec3(d.x, d.y, d.z);
-        e.body.linear_velocity = Vec3(
-            (d.x > 5.0f) ? -3.0f : (d.x < -5.0f) ? 3.0f : 0.0f,
-            0.0f,
-            0.0f
-        );
-        e.body.orientation = Quat::identity();
-        e.body.angular_velocity = Vec3(0.0f, 0.0f, 0.0f);
-        e.body.inverse_mass = 1.0f / d.mass;
-
-        // Approximate sphere inertia: I = 2/5 * m * r^2 → inv_I = 5/(2*m*r^2)
-        float inv_inertia = 5.0f / (2.0f * d.mass * d.r * d.r);
-        e.body.local_inverse_inertia = Mat3{{
-            inv_inertia, 0.0f, 0.0f,
-            0.0f, inv_inertia, 0.0f,
-            0.0f, 0.0f, inv_inertia
-        }};
-        e.body.update_world_inertia();
-
-        e.shape = CollisionShape::make_sphere(d.r, e.body.position);
-        e.shape.update_cache();
-
-        e.color_r = d.cr;
-        e.color_g = d.cg;
-        e.color_b = d.cb;
-        e.color_a = 255;
-
-        entities_.push_back(e);
-    }
-
-    std::printf("[APC SDL2] Demo scene: %u entities, ground plane at y=0\n",
-                (uint32_t)entities_.size());
+void SDL2Application::setup_vertical_slice() {
+    MatchConfig match_cfg;
+    app_.load_match(match_cfg);
 }
 
 // ---------------------------------------------------------------------------
@@ -171,40 +91,37 @@ void SDL2Application::setup_demo_scene() {
 void SDL2Application::run() {
     if (!window_ || !renderer_) return;
 
-    setup_demo_scene();
+    setup_vertical_slice();
 
     Uint64 prev_ticks = SDL_GetPerformanceCounter();
-    float accumulator = 0.0f;
-
     bool running = true;
+
     while (running) {
         Uint64 now_ticks = SDL_GetPerformanceCounter();
         float frame_dt = (float)(now_ticks - prev_ticks) / (float)SDL_GetPerformanceFrequency();
         prev_ticks = now_ticks;
 
-        // Clamp frame_dt to prevent spiral of death
+        // Clamp to prevent spiral of death
         if (frame_dt > 0.1f) frame_dt = 0.1f;
 
-        // --- Events ---
+        // Wall clock for engine timing
+        double wall_time = (double)SDL_GetTicks() / 1000.0;
+
         process_events();
         if (!window_) break;
 
-        // --- Input (camera) ---
+        // Bridge human input into the engine
         handle_input(frame_dt);
 
-        // --- Physics (fixed timestep) ---
-        if (!paused_) {
-            accumulator += frame_dt;
-            while (accumulator >= FIXED_DT) {
-                step_physics();
-                accumulator -= FIXED_DT;
-            }
-        }
+        // Core Engine Loop: begin_frame -> tick -> end_frame
+        app_.begin_frame(wall_time);
+        app_.tick();
+        app_.end_frame();
 
-        // --- Render ---
+        // Render the engine state
         render();
 
-        // Cap to ~60 FPS display
+        // Cap to ~60 FPS display refresh
         SDL_Delay(1);
     }
 }
@@ -214,7 +131,6 @@ void SDL2Application::run() {
 // ---------------------------------------------------------------------------
 
 void SDL2Application::process_events() {
-    // Refresh keyboard state (scancode array, valid for entire frame)
     keys_ = SDL_GetKeyboardState(nullptr);
 
     SDL_Event event;
@@ -236,193 +152,50 @@ void SDL2Application::process_events() {
                 shutdown();
                 return;
             }
-            if (event.key.keysym.sym == SDLK_r) {
-                setup_demo_scene();
-            }
             if (event.key.keysym.sym == SDLK_SPACE) {
-                paused_ = !paused_;
+                if (app_.state == ApplicationState::PAUSED) {
+                    app_.request_resume();
+                } else {
+                    app_.request_pause();
+                }
             }
             break;
 
         case SDL_MOUSEWHEEL:
             camera_.zoom *= (event.wheel.y > 0) ? 1.1f : 0.9f;
-            // Clamp zoom
-            if (camera_.zoom < 2.0f)  camera_.zoom = 2.0f;
-            if (camera_.zoom > 200.0f) camera_.zoom = 200.0f;
+            // Clamp zoom to useful range
+            if (camera_.zoom < 1.0f)  camera_.zoom = 1.0f;
+            if (camera_.zoom > 80.0f) camera_.zoom = 80.0f;
             break;
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Input Handling (Camera pan)
+// Input Handling — Camera Pan + Player Input
 // ---------------------------------------------------------------------------
 
 void SDL2Application::handle_input(float dt) {
     if (!keys_) return;
+
+    // 1. Camera Pan (Arrow keys only — WASD reserved for player control)
     float pan_speed = 5.0f / camera_.zoom * 100.0f;
+    if (keys_[SDL_SCANCODE_LEFT])  camera_.center_x -= pan_speed * dt;
+    if (keys_[SDL_SCANCODE_RIGHT]) camera_.center_x += pan_speed * dt;
+    if (keys_[SDL_SCANCODE_UP])    camera_.center_y += pan_speed * dt;
+    if (keys_[SDL_SCANCODE_DOWN])  camera_.center_y -= pan_speed * dt;
 
-    if (keys_[SDL_SCANCODE_LEFT]  || keys_[SDL_SCANCODE_A]) camera_.center_x -= pan_speed * dt;
-    if (keys_[SDL_SCANCODE_RIGHT] || keys_[SDL_SCANCODE_D]) camera_.center_x += pan_speed * dt;
-    if (keys_[SDL_SCANCODE_UP]    || keys_[SDL_SCANCODE_W]) camera_.center_y += pan_speed * dt;
-    if (keys_[SDL_SCANCODE_DOWN]  || keys_[SDL_SCANCODE_S]) camera_.center_y -= pan_speed * dt;
-}
+    // 2. Map Player 0 Input (WASD) to engine InputState
+    InputState p0_input;
+    if (keys_[SDL_SCANCODE_W]) p0_input.left_stick.y =  1.0f;
+    if (keys_[SDL_SCANCODE_S]) p0_input.left_stick.y = -1.0f;
+    if (keys_[SDL_SCANCODE_A]) p0_input.left_stick.x = -1.0f;
+    if (keys_[SDL_SCANCODE_D]) p0_input.left_stick.x = 1.0f;
 
-// ---------------------------------------------------------------------------
-// Physics Step
-// ---------------------------------------------------------------------------
+    // Apply dead zone and frame delta for the engine
+    p0_input.frame_delta();
 
-void SDL2Application::step_physics() {
-    // --- Gravity ---
-    for (auto& e : entities_) {
-        if (e.body.inverse_mass > 0.0f) {
-            e.body.linear_velocity = Vec3::add(
-                e.body.linear_velocity,
-                Vec3(0.0f, -9.81f * FIXED_DT, 0.0f)
-            );
-        }
-    }
-
-    // --- Collision detection + solving ---
-    detect_and_solve_collisions();
-
-    // --- Integration ---
-
-    // Build a temporary body vector for integration
-    std::vector<RigidBody> bodies;
-    bodies.reserve(entities_.size());
-    for (auto& e : entities_) {
-        bodies.push_back(e.body);
-    }
-
-    // Integrate all dynamic bodies
-    for (auto& body : bodies) {
-        if (body.inverse_mass == 0.0f) continue;
-        body.position = Vec3::add(body.position, Vec3::scale(body.linear_velocity, FIXED_DT));
-
-        // Simple orientation update (angular velocity mostly cosmetic for spheres)
-        Vec3 half_ang = Vec3::scale(body.angular_velocity, FIXED_DT * 0.5f);
-        Quat delta_q(half_ang.x, half_ang.y, half_ang.z, 0.0f);
-        body.orientation = Quat::normalize(Quat::multiply(delta_q, body.orientation));
-        body.update_world_inertia();
-
-        body.linear_velocity = Vec3::scale(body.linear_velocity, solver_.linear_damping);
-        body.angular_velocity = Vec3::scale(body.angular_velocity, solver_.angular_damping);
-    }
-
-    // Write back
-    for (size_t i = 0; i < entities_.size(); ++i) {
-        entities_[i].body = bodies[i];
-        entities_[i].shape.position = bodies[i].position;
-    }
-
-    sim_time_ += FIXED_DT;
-}
-
-// ---------------------------------------------------------------------------
-// Collision Detection & Solving
-// ---------------------------------------------------------------------------
-
-void SDL2Application::detect_and_solve_collisions() {
-    uint32_t n = (uint32_t)entities_.size();
-
-    // --- Ground collisions with direct impulse ---
-    for (auto& e : entities_) {
-        if (e.body.inverse_mass == 0.0f) continue;
-
-        SphereCollider col;
-        col.radius = e.shape.sphere_radius;
-        PlaneCollider plane;
-        plane.point  = ground_plane_.position;
-        plane.normal = ground_plane_.plane_normal;
-
-        ContactPoint contact;
-        if (detect_sphere_plane(e.body.position, col, plane, contact)) {
-            // Relative velocity at contact
-            float vel_along_normal = Vec3::dot(e.body.linear_velocity, contact.normal);
-
-            // Position correction
-            float positional_error = std::max(contact.penetration - solver_.baumgarte_slop, 0.0f)
-                                     * solver_.baumgarte_factor / FIXED_DT;
-
-            // Restitution
-            float restitution_bias = 0.0f;
-            if (vel_along_normal < -APC_EPSILON && contact.penetration < solver_.baumgarte_slop * 2.0f) {
-                restitution_bias = -solver_.restitution * vel_along_normal;
-            }
-
-            float inv_mass = e.body.inverse_mass; // Ground has 0
-            float normal_mass = (inv_mass > 0.0f) ? (1.0f / inv_mass) : 0.0f;
-            float delta_n = normal_mass * (-vel_along_normal + positional_error + restitution_bias);
-            if (delta_n > 0.0f) {
-                Vec3 impulse = Vec3::scale(contact.normal, delta_n);
-                e.body.linear_velocity = Vec3::add(e.body.linear_velocity, Vec3::scale(impulse, inv_mass));
-            }
-        }
-    }
-
-    // --- Sphere-sphere with direct impulse ---
-    for (uint32_t i = 0; i < n; ++i) {
-        for (uint32_t j = i + 1; j < n; ++j) {
-            SphereCollider col_a;
-            col_a.radius = entities_[i].shape.sphere_radius;
-            SphereCollider col_b;
-            col_b.radius = entities_[j].shape.sphere_radius;
-
-            ContactPoint contact;
-            if (detect_sphere_sphere(
-                    entities_[i].body.position, col_a,
-                    entities_[j].body.position, col_b, contact)) {
-
-                RigidBody& a = entities_[i].body;
-                RigidBody& b = entities_[j].body;
-
-                float inv_mass_sum = a.inverse_mass + b.inverse_mass;
-                if (inv_mass_sum <= 0.0f) continue;
-
-                float normal_mass = 1.0f / inv_mass_sum;
-
-                float vel_along_normal = Vec3::dot(
-                    Vec3::sub(a.linear_velocity, b.linear_velocity),
-                    contact.normal
-                );
-
-                float positional_error = std::max(contact.penetration - solver_.baumgarte_slop, 0.0f)
-                                         * solver_.baumgarte_factor / FIXED_DT;
-
-                float restitution_bias = 0.0f;
-                if (vel_along_normal < -APC_EPSILON && contact.penetration < solver_.baumgarte_slop * 2.0f) {
-                    restitution_bias = -solver_.restitution * vel_along_normal;
-                }
-
-                float delta_n = normal_mass * (-vel_along_normal + positional_error + restitution_bias);
-                if (delta_n > 0.0f) {
-                    Vec3 impulse = Vec3::scale(contact.normal, delta_n);
-                    a.linear_velocity = Vec3::add(a.linear_velocity, Vec3::scale(impulse, a.inverse_mass));
-                    b.linear_velocity = Vec3::sub(b.linear_velocity, Vec3::scale(impulse, b.inverse_mass));
-                }
-
-                // Friction (simplified)
-                Vec3 rel_vel = Vec3::sub(a.linear_velocity, b.linear_velocity);
-                float vel_n = Vec3::dot(rel_vel, contact.normal);
-                Vec3 vel_tangent = Vec3::sub(rel_vel, Vec3::scale(contact.normal, vel_n));
-                float tangent_len_sq = Vec3::length_sq(vel_tangent);
-
-                if (tangent_len_sq > APC_EPSILON_SQ) {
-                    float tangent_len = std::sqrt(tangent_len_sq);
-                    Vec3 tangent = Vec3::scale(vel_tangent, 1.0f / tangent_len);
-
-                    float friction_delta = normal_mass * tangent_len;
-                    float max_friction = solver_.friction_coefficient * delta_n;
-                    float applied = std::min(friction_delta, max_friction);
-
-                    Vec3 friction_impulse = Vec3::scale(tangent, -applied);
-                    a.linear_velocity = Vec3::add(a.linear_velocity, Vec3::scale(friction_impulse, a.inverse_mass));
-                    b.linear_velocity = Vec3::sub(b.linear_velocity, Vec3::scale(friction_impulse, b.inverse_mass));
-                }
-            }
-        }
-    }
+    app_.update_input(0, p0_input);
 }
 
 // ---------------------------------------------------------------------------
@@ -434,30 +207,45 @@ void SDL2Application::render() {
     SDL_SetRenderDrawColor(renderer_, 15, 15, 25, 255);
     SDL_RenderClear(renderer_);
 
-    // Ground grid
+    // Field ground grid
     draw_ground_grid();
 
-    // Draw entities
-    for (const auto& e : entities_) {
-        if (e.shape.type == ShapeType::Sphere) {
-            draw_circle(
-                e.body.position.x, e.body.position.y,
-                e.shape.sphere_radius,
-                e.color_r, e.color_g, e.color_b, e.color_a
-            );
+    // --- Draw Athletes from the real engine ---
+    const EntityManager& em = app_.scene.entity_manager;
+
+    for (uint32_t i = 0u; i < em.athlete_count; ++i) {
+        const AthleteEntity& a = em.athletes[i];
+        if (!a.id.is_valid() || !a.is_active) continue;
+
+        // Team 0 = Red, Team 1 = Blue, Human = Green tint
+        uint8_t r, g, b;
+        if (a.is_human_controlled) {
+            r = 50;  g = 255; b = 100; // Bright green for human
+        } else if (a.team == TEAM_HOME) {
+            r = 230; g = 60;  b = 60;  // Home: red
+        } else {
+            r = 60;  g = 80;  b = 230;  // Away: blue
         }
-        // Future: boxes, capsules, etc.
+
+        // Draw athlete circle at world XZ position (projected onto XY plane)
+        draw_circle(a.position.x, a.position.z, 0.45f, r, g, b, 255);
+    }
+
+    // --- Draw Ball from the real engine ---
+    const BallEntity* ball = em.find_ball();
+    if (ball && ball->id.is_valid()) {
+        draw_circle(ball->position.x, ball->position.z, 0.22f,
+                     255, 255, 255, 255); // White
     }
 
     // HUD overlay
     draw_hud();
 
-    // Present
     SDL_RenderPresent(renderer_);
 }
 
 // ---------------------------------------------------------------------------
-// Drawing: Circle (approximated with line segments)
+// Drawing: Circle (scanline fill + outline)
 // ---------------------------------------------------------------------------
 
 void SDL2Application::draw_circle(float wx, float wy, float wr,
@@ -470,22 +258,15 @@ void SDL2Application::draw_circle(float wx, float wy, float wr,
     if (sx + sr < 0 || sx - sr > width_ || sy + sr < 0 || sy - sr > height_) return;
     if (sr < 0.5f) return;
 
-    // Filled circle with triangles (using SDL_RenderDrawLine for speed)
-    int segments = (int)(sr * 1.5f);
-    if (segments < 8) segments = 8;
-    if (segments > 64) segments = 64;
-
-    // Fill — draw filled triangle fan using lines from center to perimeter
+    // Filled circle using scanlines
     SDL_SetRenderDrawColor(renderer_, r, g, b, a);
-
-    // Simple fill: draw horizontal scan lines (brute force but simple)
     int r_int = (int)(sr + 0.5f);
     int cx = (int)sx;
     int cy = (int)sy;
 
     for (int dy = -r_int; dy <= r_int; ++dy) {
         float dx_sq = (float)(sr * sr - dy * dy);
-        if (dx_sq < 0) continue;
+        if (dx_sq < 0.0f) continue;
         int dx = (int)(std::sqrt(dx_sq) + 0.5f);
         SDL_RenderDrawLine(renderer_, cx - dx, cy + dy, cx + dx, cy + dy);
     }
@@ -496,8 +277,7 @@ void SDL2Application::draw_circle(float wx, float wy, float wr,
         (uint8_t)std::min(255, g + 60),
         (uint8_t)std::min(255, b + 60), 255);
 
-    // Draw outline using line segments
-    static constexpr int OUTLINE_SEGMENTS = 32;
+    static constexpr int OUTLINE_SEGMENTS = 24;
     for (int i = 0; i < OUTLINE_SEGMENTS; ++i) {
         float a1 = 2.0f * (float)APC_PI * i / OUTLINE_SEGMENTS;
         float a2 = 2.0f * (float)APC_PI * (i + 1) / OUTLINE_SEGMENTS;
@@ -511,43 +291,7 @@ void SDL2Application::draw_circle(float wx, float wy, float wr,
 }
 
 // ---------------------------------------------------------------------------
-// Drawing: Box (wireframe)
-// ---------------------------------------------------------------------------
-
-void SDL2Application::draw_box(const Vec3& pos, const Vec3& he, const Mat3& rot,
-                                uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    // Project 8 corners to screen and draw wireframe
-    float corners[8][3] = {
-        {-he.x, -he.y, -he.z}, { he.x, -he.y, -he.z},
-        {-he.x,  he.y, -he.z}, { he.x,  he.y, -he.z},
-        {-he.x, -he.y,  he.z}, { he.x, -he.y,  he.z},
-        {-he.x,  he.y,  he.z}, { he.x,  he.y,  he.z}
-    };
-
-    float screen_pts[8][2];
-    for (int i = 0; i < 8; ++i) {
-        Vec3 local(corners[i][0], corners[i][1], corners[i][2]);
-        Vec3 world = Vec3::add(pos, rot.transform_vec(local));
-        screen_pts[i][0] = camera_.world_to_screen_x(world.x, width_);
-        screen_pts[i][1] = camera_.world_to_screen_y(world.y, height_);
-    }
-
-    SDL_SetRenderDrawColor(renderer_, r, g, b, a);
-
-    // 12 edges of a cube
-    static const int edges[12][2] = {
-        {0,1},{0,2},{0,4},{1,3},{1,5},{2,3},
-        {2,6},{3,7},{4,5},{4,6},{5,7},{6,7}
-    };
-    for (const auto& e : edges) {
-        SDL_RenderDrawLine(renderer_,
-            (int)screen_pts[e[0]][0], (int)screen_pts[e[0]][1],
-            (int)screen_pts[e[1]][0], (int)screen_pts[e[1]][1]);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Drawing: Ground Grid
+// Drawing: Ground Grid (soccer field lines)
 // ---------------------------------------------------------------------------
 
 void SDL2Application::draw_ground_grid() {
@@ -557,49 +301,69 @@ void SDL2Application::draw_ground_grid() {
     float bottom = camera_.center_y - (float)height_ / (2.0f * camera_.zoom);
     float top    = camera_.center_y + (float)height_ / (2.0f * camera_.zoom);
 
-    // Grid spacing adapts to zoom level
-    float grid_spacing = 1.0f;
-    if (camera_.zoom < 10.0f)  grid_spacing = 5.0f;
-    if (camera_.zoom < 4.0f)   grid_spacing = 10.0f;
-    if (camera_.zoom > 50.0f)  grid_spacing = 0.5f;
+    // Field background (dark green)
+    float half_x = app_.scene.config.field_length * 0.5f;
+    float half_z = app_.scene.config.field_width * 0.5f;
 
-    // Ground line at y=0
-    float ground_sy = camera_.world_to_screen_y(0.0f, height_);
-    if (ground_sy >= 0 && ground_sy <= height_) {
-        // Ground fill (dark green-brown below ground)
-        SDL_SetRenderDrawColor(renderer_, 25, 35, 20, 255);
-        SDL_Rect ground_rect;
-        ground_rect.x = 0;
-        ground_rect.y = (int)ground_sy;
-        ground_rect.w = width_;
-        ground_rect.h = height_ - (int)ground_sy;
-        SDL_RenderFillRect(renderer_, &ground_rect);
+    int fx1 = (int)camera_.world_to_screen_x(-half_x, width_);
+    int fx2 = (int)camera_.world_to_screen_x( half_x, width_);
+    int fz1 = (int)camera_.world_to_screen_y(-half_z, height_);
+    int fz2 = (int)camera_.world_to_screen_y( half_z, height_);
 
-        // Ground line
-        SDL_SetRenderDrawColor(renderer_, 80, 120, 60, 255);
-        SDL_RenderDrawLine(renderer_, 0, (int)ground_sy, width_, (int)ground_sy);
+    SDL_SetRenderDrawColor(renderer_, 20, 40, 18, 255);
+    SDL_Rect field_rect;
+    field_rect.x = (fx1 < fx2) ? fx1 : fx2;
+    field_rect.y = (fz1 < fz2) ? fz1 : fz2;
+    field_rect.w = (fx2 > fx1) ? (fx2 - fx1) : (fx1 - fx2);
+    field_rect.h = (fz2 > fz1) ? (fz2 - fz1) : (fz1 - fz2);
+    SDL_RenderFillRect(renderer_, &field_rect);
+
+    // Field outline (bright green)
+    SDL_SetRenderDrawColor(renderer_, 60, 130, 50, 255);
+    SDL_RenderDrawRect(renderer_, &field_rect);
+
+    // Center line
+    int cx = (int)camera_.world_to_screen_x(0.0f, width_);
+    SDL_RenderDrawLine(renderer_, cx, fz1, cx, fz2);
+
+    // Center circle
+    float center_r = app_.scene.config.field_length * 0.5f * 0.087f; // ~9.15m
+    int cr_px = (int)camera_.world_to_screen_scale(center_r);
+    int cy_px = (int)((fz1 + fz2) * 0.5f);
+    if (cr_px > 2) {
+        static constexpr int CIRCLE_SEGMENTS = 32;
+        for (int i = 0; i < CIRCLE_SEGMENTS; ++i) {
+            float a1 = 2.0f * (float)APC_PI * i / CIRCLE_SEGMENTS;
+            float a2 = 2.0f * (float)APC_PI * (i + 1) / CIRCLE_SEGMENTS;
+            SDL_RenderDrawLine(renderer_,
+                cx + (int)(std::cos(a1) * cr_px), cy_px - (int)(std::sin(a1) * cr_px),
+                cx + (int)(std::cos(a2) * cr_px), cy_px - (int)(std::sin(a2) * cr_px)
+            );
+        }
     }
 
-    // Vertical grid lines
-    float x_start = std::floor(left / grid_spacing) * grid_spacing;
-    for (float x = x_start; x <= right; x += grid_spacing) {
-        int sx = (int)camera_.world_to_screen_x(x, width_);
-        // Major/minor distinction
-        bool is_major = std::fmod(std::abs(x), grid_spacing * 5.0f) < APC_EPSILON;
-        SDL_SetRenderDrawColor(renderer_,
-            is_major ? 50 : 30, is_major ? 50 : 30, is_major ? 55 : 35, 255);
-        SDL_RenderDrawLine(renderer_, sx, 0, sx, height_);
-    }
+    // Penalty area rectangles
+    float pa_depth = 16.5f;
+    float pa_width = 20.16f; // Half of 40.32m
 
-    // Horizontal grid lines (in world Y direction, shown above ground)
-    float y_start = std::floor(std::max(0.0f, bottom) / grid_spacing) * grid_spacing;
-    for (float y = y_start; y <= top; y += grid_spacing) {
-        int sy = (int)camera_.world_to_screen_y(y, height_);
-        bool is_major = std::fmod(std::abs(y), grid_spacing * 5.0f) < APC_EPSILON;
-        SDL_SetRenderDrawColor(renderer_,
-            is_major ? 50 : 30, is_major ? 50 : 30, is_major ? 55 : 35, 255);
-        SDL_RenderDrawLine(renderer_, 0, sy, width_, sy);
-    }
+    // Home penalty area
+    int pa_hx1 = (int)camera_.world_to_screen_x(-half_x, width_);
+    int pa_hx2 = (int)camera_.world_to_screen_x(-half_x + pa_depth, width_);
+    int pa_hz1 = (int)camera_.world_to_screen_y(-pa_width, height_);
+    int pa_hz2 = (int)camera_.world_to_screen_y( pa_width, height_);
+    SDL_SetRenderDrawColor(renderer_, 55, 100, 45, 255);
+    SDL_Rect pa_home;
+    pa_home.x = pa_hx1; pa_home.y = pa_hz1;
+    pa_home.w = pa_hx2 - pa_hx1; pa_home.h = pa_hz2 - pa_hz1;
+    SDL_RenderDrawRect(renderer_, &pa_home);
+
+    // Away penalty area
+    int pa_ax1 = (int)camera_.world_to_screen_x(half_x - pa_depth, width_);
+    int pa_ax2 = (int)camera_.world_to_screen_x(half_x, width_);
+    SDL_Rect pa_away;
+    pa_away.x = pa_ax1; pa_away.y = pa_hz1;
+    pa_away.w = pa_ax2 - pa_ax1; pa_away.h = pa_hz2 - pa_hz1;
+    SDL_RenderDrawRect(renderer_, &pa_away);
 }
 
 // ---------------------------------------------------------------------------
@@ -607,65 +371,104 @@ void SDL2Application::draw_ground_grid() {
 // ---------------------------------------------------------------------------
 
 void SDL2Application::draw_hud() {
-    // Simple text overlay using basic SDL (no SDL_ttf dependency)
-    // We draw a semi-transparent background bar at the top
-
+    // Semi-transparent background bar
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 140);
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 160);
     SDL_Rect hud_rect;
     hud_rect.x = 0;
     hud_rect.y = 0;
     hud_rect.w = width_;
-    hud_rect.h = 36;
+    hud_rect.h = 40;
     SDL_RenderFillRect(renderer_, &hud_rect);
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
 
-    // FPS and info text — using basic rectangles as "LED indicators" for state
-    // (We avoid SDL_ttf to keep dependencies minimal)
+    // Score display — Home (red) vs Away (blue)
+    uint32_t home = app_.scene.home_score;
+    uint32_t away = app_.scene.away_score;
 
-    // Simulation time indicator (bar at top-left)
-    float time_bar_width = std::fmod(sim_time_, 10.0f) / 10.0f * 100.0f;
-    SDL_SetRenderDrawColor(renderer_, 100, 200, 100, 255);
-    SDL_Rect time_bar;
-    time_bar.x = 10;
-    time_bar.y = 12;
-    time_bar.w = (int)time_bar_width;
-    time_bar.h = 12;
-    SDL_RenderFillRect(renderer_, &time_bar);
+    // Home score indicator (red dot + number)
+    SDL_SetRenderDrawColor(renderer_, 230, 60, 60, 255);
+    SDL_Rect home_bg;
+    home_bg.x = 10;
+    home_bg.y = 8;
+    home_bg.w = 80;
+    home_bg.h = 24;
+    SDL_RenderFillRect(renderer_, &home_bg);
 
-    // Entity count indicator (dots)
-    uint32_t count = (uint32_t)entities_.size();
-    for (uint32_t i = 0; i < count && i < 20; ++i) {
-        SDL_SetRenderDrawColor(renderer_,
-            entities_[i].color_r, entities_[i].color_g, entities_[i].color_b, 255);
+    // Score bar (visual representation of score)
+    for (uint32_t i = 0u; i < home && i < 10u; ++i) {
+        SDL_SetRenderDrawColor(renderer_, 255, 255, 255, 255);
         SDL_Rect dot;
-        dot.x = 130 + (int)i * 14;
-        dot.y = 14;
-        dot.w = 8;
-        dot.h = 8;
+        dot.x = 15 + (int)i * 7;
+        dot.y = 12;
+        dot.w = 5;
+        dot.h = 16;
         SDL_RenderFillRect(renderer_, &dot);
     }
 
-    // Pause indicator (red square if paused)
-    if (paused_) {
-        SDL_SetRenderDrawColor(renderer_, 255, 60, 60, 255);
-        SDL_Rect pause_box;
-        pause_box.x = width_ - 50;
-        pause_box.y = 8;
-        pause_box.w = 20;
-        pause_box.h = 20;
-        SDL_RenderFillRect(renderer_, &pause_box);
+    // Away score indicator (blue dot + number)
+    SDL_SetRenderDrawColor(renderer_, 60, 80, 230, 255);
+    SDL_Rect away_bg;
+    away_bg.x = width_ - 90;
+    away_bg.y = 8;
+    away_bg.w = 80;
+    away_bg.h = 24;
+    SDL_RenderFillRect(renderer_, &away_bg);
 
-        pause_box.x = width_ - 25;
-        pause_box.y = 8;
-        pause_box.w = 20;
-        pause_box.h = 20;
-        SDL_RenderFillRect(renderer_, &pause_box);
+    for (uint32_t i = 0u; i < away && i < 10u; ++i) {
+        SDL_SetRenderDrawColor(renderer_, 255, 255, 255, 255);
+        SDL_Rect dot;
+        dot.x = width_ - 85 + (int)i * 7;
+        dot.y = 12;
+        dot.w = 5;
+        dot.h = 16;
+        SDL_RenderFillRect(renderer_, &dot);
+    }
+
+    // Match time (center)
+    float sim_t = app_.scene.match_time_seconds;
+    uint32_t minutes = static_cast<uint32_t>(sim_t / 60.0f);
+    uint32_t seconds = static_cast<uint32_t>(sim_t) % 60u;
+
+    // Time bar
+    float time_frac = std::fmod(sim_t, 60.0f) / 60.0f;
+    SDL_SetRenderDrawColor(renderer_, 150, 200, 150, 255);
+    SDL_Rect time_bar;
+    time_bar.x = width_ / 2 - 50;
+    time_bar.y = 30;
+    time_bar.w = (int)(time_frac * 100.0f);
+    time_bar.h = 4;
+    SDL_RenderFillRect(renderer_, &time_bar);
+
+    SDL_SetRenderDrawColor(renderer_, 100, 200, 100, 255);
+    SDL_Rect time_bg;
+    time_bg.x = width_ / 2 - 50;
+    time_bg.y = 14;
+    time_bg.w = 100;
+    time_bg.h = 20;
+    SDL_RenderDrawRect(renderer_, &time_bg);
+
+    // Pause indicator
+    if (app_.state == ApplicationState::PAUSED) {
+        SDL_SetRenderDrawColor(renderer_, 255, 60, 60, 255);
+        SDL_Rect pause1;
+        pause1.x = width_ / 2 - 15;
+        pause1.y = 8;
+        pause1.w = 10;
+        pause1.h = 20;
+        SDL_RenderFillRect(renderer_, &pause1);
+
+        SDL_Rect pause2;
+        pause2.x = width_ / 2 + 5;
+        pause2.y = 8;
+        pause2.w = 10;
+        pause2.h = 20;
+        SDL_RenderFillRect(renderer_, &pause2);
     }
 
     // Zoom indicator (bottom-right)
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 100);
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 120);
     SDL_Rect zoom_bg;
     zoom_bg.x = width_ - 140;
     zoom_bg.y = height_ - 30;
@@ -674,8 +477,7 @@ void SDL2Application::draw_hud() {
     SDL_RenderFillRect(renderer_, &zoom_bg);
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
 
-    // Zoom bar
-    float zoom_pct = (camera_.zoom - 2.0f) / (200.0f - 2.0f);
+    float zoom_pct = (camera_.zoom - 1.0f) / (80.0f - 1.0f);
     SDL_SetRenderDrawColor(renderer_, 150, 150, 200, 255);
     SDL_Rect zoom_bar;
     zoom_bar.x = width_ - 130;
@@ -711,8 +513,8 @@ int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
 
-    std::printf("=== APC Physics Engine — SDL2 Visualizer ===\n");
-    std::printf("Controls: WASD/Arrows=Pan, Scroll=Zoom, R=Reset, Space=Pause, Esc=Quit\n\n");
+    std::printf("=== APC Physics Engine — Vertical Slice ===\n");
+    std::printf("Controls: Arrows=Pan, Scroll=Zoom, WASD=Player, Space=Pause, Esc=Quit\n\n");
 
     apc::SDL2Application app;
 
