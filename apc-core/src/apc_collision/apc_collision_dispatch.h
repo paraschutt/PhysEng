@@ -50,11 +50,13 @@ struct ContactManifold {
     uint32_t id_b;                          // Body B identifier (id_a < id_b)
     ContactPoint contacts[MAX_CONTACTS_PER_PAIR];
     uint32_t contact_count;                 // Number of valid contacts (0 = separated)
+    bool is_block_solved = false;           // Set by solver: true if ball-athlete pair was block-solved
 
     void reset() {
         id_a = 0u;
         id_b = 0u;
         contact_count = 0u;
+        is_block_solved = false;
     }
 
     void add_contact(const ContactPoint& cp) {

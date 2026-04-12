@@ -1,19 +1,21 @@
 #pragma once
 // =============================================================================
-// apc_si_solver_3d.h — Sequential Impulse solver with warmstart, ball-CCD,
-//                        dynamic iterations, and sleep awareness
+// apc_si_solver_3d.h — Sequential Impulse solver with warmstart, block solve,
+//                        ball-CCD, and sleep awareness
 // =============================================================================
 //
-// Solves contact constraints using the Sequential Impulse (SI) method with:
-//   - Warmstart support (reads accumulated impulses from ContactManager)
-//   - Dynamic solver iterations (extra passes for ball contacts)
+// Solves contact constraints using a hybrid approach:
+//   - Block solver: direct 1-shot impulse for ball-athlete contacts (exact
+//     resolution of extreme mass ratios, e.g. 100kg athlete vs 0.4kg ball)
+//   - Sequential Impulse (SI): iterative solver for all other contacts
+//     (athlete-athlete, ground-plane) with warmstart support
 //   - CCD (Continuous Collision Detection) for ball tunneling prevention
 //   - Sleep-aware solve/integrate (skips sleeping bodies)
 //
 // Pipeline per frame:
 //   1. ContactManager::update()           — match contacts, warmstart impulses
 //   2. Solver3D::prepare() or prepare_warmstarted()  — build VelocityConstraints
-//   3. Solver3D::solve()                  — SI iterations (base + ball extra)
+//   3. Solver3D::solve()                  — block solve + SI iterations
 //   4. Solver3D::integrate()              — Euler integration + sleep check
 //   5. ContactManager::store_impulse()    — write back impulses for next frame
 //
@@ -50,6 +52,11 @@ struct VelocityConstraint {
     // Tangential (friction) impulse accumulation
     Vec3 accumulated_friction_impulse;
     float friction_mass;  // Effective mass for tangential direction
+
+    // Block-solve flag: true if this constraint was resolved by the direct
+    // block solver (ball-athlete pair). The SI loop skips the normal impulse
+    // for these constraints but still iterates friction.
+    bool is_block_solved = false;
 };
 
 class Solver3D {
@@ -68,11 +75,12 @@ public:
     float linear_damping = 0.999f;     // Per-frame velocity damping
     float angular_damping = 0.998f;    // Per-frame angular damping
 
-    // --- Dynamic ball iterations ---
-    // Extra SI iterations applied only to contacts involving a ball body.
-    // Balls have high mass disparity with athletes and high velocity,
-    // requiring more solver cycles to converge stably.
-    uint32_t ball_extra_iterations = 4;
+    // --- Block solver ---
+    // When enabled, contacts between a ball and any other body are resolved
+    // with a single direct impulse computation instead of iterative SI.
+    // This mathematically eliminates the mass ratio convergence problem
+    // (e.g., 100kg athlete vs 0.4kg ball) in one step.
+    bool enable_block_solve = true;
 
     // --- CCD (Continuous Collision Detection) configuration ---
     // When a ball moves more than (bounding_radius * ccd_factor) per frame,
@@ -163,28 +171,49 @@ public:
     }
 
     // =========================================================================
-    // solve — Sequential impulse solver with sleep awareness + ball extras
+    // solve — Block solver for ball contacts + SI for all contacts
+    // =========================================================================
+    //
+    // Phase 1 (Block Solve):
+    //   For any constraint involving exactly one ball body, compute the exact
+    //   normal impulse in a single step. This handles the extreme mass ratio
+    //   (e.g., 100kg athlete / 0.4kg ball = 250:1) that causes SI to
+    //   vibrate or fail to converge. The constraint is flagged is_block_solved
+    //   so the SI loop skips its normal impulse but still processes friction.
+    //
+    // Phase 2 (Sequential Impulse):
+    //   Standard iterative solver for all constraints. Block-solved constraints
+    //   only have their friction impulses updated; the normal impulse was
+    //   already resolved exactly in Phase 1.
+    //
+    // The previous ball_extra_iterations band-aid has been entirely removed.
     // =========================================================================
     void solve(std::vector<RigidBody>& bodies, float dt) {
-        // Phase 1: Base iterations for ALL contacts
-        for (uint32_t iter = 0u; iter < velocity_iterations; ++iter) {
+        // ---- Phase 1: Direct Block Solve for ball-athlete impacts ----
+        if (enable_block_solve) {
             for (auto& c : constraints) {
-                solve_single_constraint(c, bodies, dt);
+                if (c.id_a >= bodies.size() || c.id_b >= bodies.size()) continue;
+
+                const RigidBody& a = bodies[c.id_a];
+                const RigidBody& b = bodies[c.id_b];
+
+                // XOR bitwise check: true ONLY if exactly one body is the ball
+                bool is_a_ball = a.is_ball();
+                bool is_b_ball = b.is_ball();
+
+                if (is_a_ball ^ is_b_ball) {
+                    solve_block_constraint(c, bodies, dt);
+                    c.is_block_solved = true;
+                } else {
+                    c.is_block_solved = false;
+                }
             }
         }
 
-        // Phase 2: Extra iterations for ball contacts only
-        // Balls flagged STATE_IS_BALL get additional solver passes to handle
-        // mass disparity and high-speed impacts more stably.
-        for (uint32_t iter = 0u; iter < ball_extra_iterations; ++iter) {
+        // ---- Phase 2: Standard Sequential Impulse for everything ----
+        for (uint32_t iter = 0u; iter < velocity_iterations; ++iter) {
             for (auto& c : constraints) {
-                if (c.id_a < bodies.size() && c.id_b < bodies.size()) {
-                    const RigidBody& a = bodies[c.id_a];
-                    const RigidBody& b = bodies[c.id_b];
-                    if (a.is_ball() || b.is_ball()) {
-                        solve_single_constraint(c, bodies, dt);
-                    }
-                }
+                solve_single_constraint(c, bodies, dt);
             }
         }
     }
@@ -273,10 +302,74 @@ private:
     }
 
     // =========================================================================
+    // solve_block_constraint — Direct 1-shot block solve for ball contacts
+    // =========================================================================
+    //
+    // For contacts involving exactly one ball body, computes the exact normal
+    // impulse required to resolve the velocity constraint in a single step.
+    // This eliminates the sequential impulse convergence problem caused by
+    // extreme mass ratios (e.g., 100kg athlete vs 0.4kg ball = 250:1).
+    //
+    // The formula: j = -(1 + e) * v_n / K
+    //   where v_n = relative velocity along contact normal
+    //         K   = effective inverse mass (1/m_a + 1/m_b + rotational terms)
+    //         e   = coefficient of restitution
+    //
+    // No accumulation or clamping is needed since this is an exact solve.
+    // The resulting impulse is stored in accumulated_normal_impulse so the
+    // friction cone limit (mu * j_n) is available for subsequent SI friction.
+    // =========================================================================
+    APC_FORCEINLINE void solve_block_constraint(
+        VelocityConstraint& c, std::vector<RigidBody>& bodies, float dt)
+    {
+        if (c.id_a >= bodies.size() || c.id_b >= bodies.size()) return;
+
+        RigidBody& a = bodies[c.id_a];
+        RigidBody& b = bodies[c.id_b];
+
+        // Skip if both bodies are sleeping
+        if (a.is_sleeping() && b.is_sleeping()) return;
+
+        // Compute relative velocity at contact point
+        Vec3 vel_a = Vec3::add(a.linear_velocity, Vec3::cross(a.angular_velocity, c.r_a));
+        Vec3 vel_b = Vec3::add(b.linear_velocity, Vec3::cross(b.angular_velocity, c.r_b));
+        Vec3 rel_vel = Vec3::sub(vel_a, vel_b);
+
+        float vel_along_normal = Vec3::dot(rel_vel, c.normal);
+
+        // Do not resolve if velocities are separating
+        if (vel_along_normal > 0.0f) {
+            c.accumulated_normal_impulse = 0.0f;
+            return;
+        }
+
+        // Direct solve: calculate exact impulse to reach restitution target
+        // j = -(1 + e) * v_n / K, where K = 1 / normal_mass
+        float j = -(1.0f + restitution) * vel_along_normal * c.normal_mass;
+
+        // Clamp to non-negative (contact can only push, never pull)
+        j = std::max(j, 0.0f);
+
+        // Store for friction cone clamping in subsequent SI iterations
+        c.accumulated_normal_impulse = j;
+
+        // Apply impulse directly to both bodies
+        Vec3 impulse = Vec3::scale(c.normal, j);
+        a.apply_impulse(impulse, c.contact_point);
+        b.apply_impulse(Vec3::scale(impulse, -1.0f), c.contact_point);
+    }
+
+    // =========================================================================
     // solve_single_constraint — One SI iteration for one contact
     // =========================================================================
     // Handles: normal impulse + Baumgarte position correction + restitution
     //          + Coulomb cone friction.
+    //
+    // When is_block_solved == true (set by the block solver for ball contacts),
+    // the normal impulse is SKIPPED — it was already resolved exactly by
+    // solve_block_constraint(). Only the friction impulse is computed, using
+    // the block-solved normal impulse for the Coulomb cone limit.
+    //
     // Skips if either body is sleeping (unless woken by a previous impulse).
     // =========================================================================
     APC_FORCEINLINE void solve_single_constraint(
@@ -290,37 +383,41 @@ private:
         // Skip if both bodies are sleeping
         if (a.is_sleeping() && b.is_sleeping()) return;
 
-        // Relative velocity at contact point
+        // ---- NORMAL IMPULSE (skipped for block-solved constraints) ----
+        if (!c.is_block_solved) {
+            // Relative velocity at contact point
+            Vec3 vel_a = Vec3::add(a.linear_velocity, Vec3::cross(a.angular_velocity, c.r_a));
+            Vec3 vel_b = Vec3::add(b.linear_velocity, Vec3::cross(b.angular_velocity, c.r_b));
+            Vec3 rel_vel = Vec3::sub(vel_a, vel_b);
+
+            float vel_along_normal = Vec3::dot(rel_vel, c.normal);
+            float positional_error = std::max(c.penetration - baumgarte_slop, 0.0f) * baumgarte_factor / dt;
+
+            // Restitution bias: bounce when approaching with small penetration
+            float restitution_bias = 0.0f;
+            if (restitution > 0.0f) {
+                if (vel_along_normal < -APC_EPSILON && c.penetration < baumgarte_slop * 2.0f) {
+                    restitution_bias = -restitution * vel_along_normal;
+                }
+            }
+
+            float delta_normal = c.normal_mass * (-vel_along_normal + positional_error + restitution_bias);
+            float new_normal_impulse = std::max(c.accumulated_normal_impulse + delta_normal, 0.0f);
+            delta_normal = new_normal_impulse - c.accumulated_normal_impulse;
+            c.accumulated_normal_impulse = new_normal_impulse;
+
+            Vec3 normal_impulse = Vec3::scale(c.normal, delta_normal);
+            a.apply_impulse(normal_impulse, c.contact_point);
+            b.apply_impulse(Vec3::scale(normal_impulse, -1.0f), c.contact_point);
+        }
+
+        // ---- FRICTION IMPULSE (Coulomb cone model) ----
+        // Always computed, even for block-solved constraints, using the
+        // accumulated_normal_impulse (either from block solve or SI) as
+        // the cone limit.
         Vec3 vel_a = Vec3::add(a.linear_velocity, Vec3::cross(a.angular_velocity, c.r_a));
         Vec3 vel_b = Vec3::add(b.linear_velocity, Vec3::cross(b.angular_velocity, c.r_b));
         Vec3 rel_vel = Vec3::sub(vel_a, vel_b);
-
-        // ---- NORMAL IMPULSE ----
-        float vel_along_normal = Vec3::dot(rel_vel, c.normal);
-        float positional_error = std::max(c.penetration - baumgarte_slop, 0.0f) * baumgarte_factor / dt;
-
-        // Restitution bias: bounce when approaching with small penetration
-        float restitution_bias = 0.0f;
-        if (restitution > 0.0f) {
-            if (vel_along_normal < -APC_EPSILON && c.penetration < baumgarte_slop * 2.0f) {
-                restitution_bias = -restitution * vel_along_normal;
-            }
-        }
-
-        float delta_normal = c.normal_mass * (-vel_along_normal + positional_error + restitution_bias);
-        float new_normal_impulse = std::max(c.accumulated_normal_impulse + delta_normal, 0.0f);
-        delta_normal = new_normal_impulse - c.accumulated_normal_impulse;
-        c.accumulated_normal_impulse = new_normal_impulse;
-
-        Vec3 normal_impulse = Vec3::scale(c.normal, delta_normal);
-        a.apply_impulse(normal_impulse, c.contact_point);
-        b.apply_impulse(Vec3::scale(normal_impulse, -1.0f), c.contact_point);
-
-        // ---- FRICTION IMPULSE (Coulomb cone model) ----
-        // Recompute relative velocity after normal impulse
-        vel_a = Vec3::add(a.linear_velocity, Vec3::cross(a.angular_velocity, c.r_a));
-        vel_b = Vec3::add(b.linear_velocity, Vec3::cross(b.angular_velocity, c.r_b));
-        rel_vel = Vec3::sub(vel_a, vel_b);
 
         float vel_n = Vec3::dot(rel_vel, c.normal);
         Vec3 vel_tangent = Vec3::sub(rel_vel, Vec3::scale(c.normal, vel_n));
