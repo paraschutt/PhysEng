@@ -26,6 +26,7 @@
 #include "apc_ai/apc_ai_motor.h"
 #include "apc_ai/apc_ai_decision.h"
 #include "apc_ai/apc_ai_perception.h"  // PerceptionRingBuffer (Phase 11b Action 6)
+#include "apc_ai/apc_ai_influence_map.h" // InfluenceMap (Phase 11b Action 7)
 #include "apc_input/apc_input_types.h"
 #include "apc_math/apc_vec3.h"
 #include "apc_math/apc_math_common.h"
@@ -111,6 +112,12 @@ struct SceneState {
     // based on each athlete's reaction_frames stat (default: 12 = 200ms).
     PerceptionRingBuffer perception_buffer;
 
+    // --- Semantic influence map for AI spatial awareness (Phase 11b Action 7) ---
+    // Low-res 32x16 grid: threat = opponent proximity, control = friendly presence.
+    // Built from delayed perception snapshots to match AI's reaction delay.
+    // AI queries find_best_open_space() to navigate using semantic field rules.
+    InfluenceMap influence_map;
+
     // --- Match configuration ---
     MatchConfig      config;
 
@@ -194,6 +201,7 @@ struct SceneState {
         utility_ai[0].reset();
         utility_ai[1].reset();
         perception_buffer.clear();
+        influence_map.clear();
     }
 
     // =========================================================================
@@ -250,6 +258,44 @@ struct SceneState {
         default: ball_type = 0; break;
         }
         entity_manager.spawn_ball(ball_type, Vec3(0.0f, 0.11f, 0.0f));
+    }
+
+    // =========================================================================
+    // build_influence_map — Populate influence grid from delayed perception
+    // =========================================================================
+    // Phase 11b Action 7: Builds the InfluenceMap once per AI tick using the
+    // delayed perception buffer. A baseline 12-frame delay (~200ms) represents
+    // the "average" team perception of the battlefield geometry.
+    //
+    // Each athlete's historical position (from the delayed snapshot) is
+    // injected as either threat (opponent team) or control (own team).
+    //
+    // Parameters:
+    //   field             — SportField for spatial mapping and semantic queries
+    //   team_perspective  — Which team is evaluating (its opponents are threats)
+    //
+    // Call this from the Application layer after pushing a perception snapshot
+    // but before evaluating individual AI decisions.
+    // =========================================================================
+    void build_influence_map(const SportField& field, uint8_t team_perspective)
+    {
+        influence_map.initialize(field);
+        influence_map.clear();
+
+        // If no perception history yet, nothing to build from
+        if (perception_buffer.get_count() == 0u) return;
+
+        // Use a baseline 12-frame delay (~200ms) for the spatial map
+        const PerceptionSnapshot& delayed = perception_buffer.get_delayed_state(12u);
+
+        for (uint32_t i = 0u; i < delayed.athlete_count; ++i) {
+            const AthletePercept& p = delayed.athletes[i];
+            if (!p.is_active) continue;
+
+            // Athletes on the opposing team are "threats"
+            bool is_threat = (p.team != team_perspective);
+            influence_map.inject_influence(p.position, 1.0f, 8.0f, is_threat);
+        }
     }
 
     // =========================================================================
