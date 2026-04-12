@@ -32,6 +32,7 @@
 #include "apc_math/apc_vec3.h"
 #include "apc_math/apc_math_common.h"
 #include <cstdint>
+#include <cstdio>
 #include <cmath>
 
 namespace apc {
@@ -200,6 +201,9 @@ struct SceneState {
     uint32_t away_score        = 0u;
     float    match_time_seconds = 0.0f; // Global continuous tracker (only ticks during LIVE_PLAY)
 
+    // --- Rule & transition timers (Phase 16 Action 1) ---
+    float post_event_timer = 0.0f; // Delay before resetting after a goal/OOB
+
     // --- Ball possession tracking ---
     EntityId  last_ball_toucher   = EntityId::make_invalid();
     TeamId    last_possession_team = TEAM_NONE;
@@ -269,6 +273,7 @@ struct SceneState {
         possession_timer     = 0.0f;
         ball_in_play         = 1u;
         out_of_bounds_timer  = 0.0f;
+        post_event_timer     = 0.0f;
 
         for (uint32_t i = 0u; i < MAX_AI_CONTROLLERS; ++i) {
             ai_controllers[i].reset();
@@ -425,20 +430,21 @@ struct SceneState {
         float half_l = geo.length * 0.5f;
         float half_w = geo.width  * 0.5f;
 
-        // OUT_OF_BOUNDS: perimeter strip around the field
+        // OUT_OF_BOUNDS: perimeter strip around the field (Phase 16: Y extent for 3D)
         float bw = geo.boundary_width;
+        float oob_y_max = 20.0f; // Detect balls up to 20m high
         field.add_semantic_zone(ZoneSemantic::OUT_OF_BOUNDS,
             Vec3(-half_l - bw, 0.0f, -half_w - bw),
-            Vec3(half_l + bw,    0.0f, -half_w));
+            Vec3(half_l + bw,    oob_y_max, -half_w));
         field.add_semantic_zone(ZoneSemantic::OUT_OF_BOUNDS,
             Vec3(-half_l - bw, 0.0f,  half_w),
-            Vec3(half_l + bw,    0.0f,  half_w + bw));
+            Vec3(half_l + bw,    oob_y_max,  half_w + bw));
         field.add_semantic_zone(ZoneSemantic::OUT_OF_BOUNDS,
             Vec3(-half_l - bw, 0.0f, -half_w),
-            Vec3(-half_l,       0.0f,  half_w));
+            Vec3(-half_l,       oob_y_max,  half_w));
         field.add_semantic_zone(ZoneSemantic::OUT_OF_BOUNDS,
             Vec3(half_l,        0.0f, -half_w),
-            Vec3(half_l + bw,   0.0f,  half_w));
+            Vec3(half_l + bw,   oob_y_max,  half_w));
 
         // Sport-specific semantic zones
         switch (config.sport) {
@@ -466,14 +472,14 @@ struct SceneState {
             field.add_semantic_zone(ZoneSemantic::RESTRICTED_DEFENSE,
                 Vec3(half_l - ga_d, 0.0f, -ga_hw),
                 Vec3(half_l,        0.0f, ga_hw));
-            // Home goal
+            // Home goal (Phase 16: Y extent = goal_height for 3D detection)
             field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
                 Vec3(-half_l - gd, 0.0f, -gw),
-                Vec3(-half_l,       0.0f, gw));
+                Vec3(-half_l,       geo.goal_height, gw));
             // Away goal
             field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
                 Vec3(half_l,        0.0f, -gw),
-                Vec3(half_l + gd,   0.0f, gw));
+                Vec3(half_l + gd,   geo.goal_height, gw));
             break;
         }
         case SportType::BASKETBALL: {
@@ -488,37 +494,37 @@ struct SceneState {
             field.add_semantic_zone(ZoneSemantic::RESTRICTED_DEFENSE,
                 Vec3(half_l - lane_d, 0.0f, -lane_hw),
                 Vec3(half_l,          0.0f, lane_hw));
-            // Home hoop
+            // Home hoop (Phase 16: Y extent = goal_height for 3D detection)
             field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
-                Vec3(-half_l - 0.5f, 0.0f, -geo.goal_width * 0.5f),
-                Vec3(-half_l,         0.0f,  geo.goal_width * 0.5f));
+                Vec3(-half_l - 0.5f, geo.goal_height - 1.0f, -geo.goal_width * 0.5f),
+                Vec3(-half_l,         geo.goal_height + 1.0f,  geo.goal_width * 0.5f));
             // Away hoop
             field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
-                Vec3(half_l,          0.0f, -geo.goal_width * 0.5f),
-                Vec3(half_l + 0.5f,   0.0f,  geo.goal_width * 0.5f));
+                Vec3(half_l,          geo.goal_height - 1.0f, -geo.goal_width * 0.5f),
+                Vec3(half_l + 0.5f,   geo.goal_height + 1.0f,  geo.goal_width * 0.5f));
             break;
         }
         case SportType::AMERICAN_FOOTBALL: {
-            // Home endzone
+            // Home endzone (Phase 16: Y extent for 3D detection)
             field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
                 Vec3(-half_l - 10.0f, 0.0f, -half_w),
-                Vec3(-half_l,         0.0f,  half_w));
+                Vec3(-half_l,         geo.goal_height,  half_w));
             // Away endzone
             field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
                 Vec3(half_l,           0.0f, -half_w),
-                Vec3(half_l + 10.0f,  0.0f,  half_w));
+                Vec3(half_l + 10.0f,  geo.goal_height,  half_w));
             break;
         }
         case SportType::RUGBY_UNION: {
             float try_d = geo.penalty_area_depth;
-            // Home try zone (in-goal area)
+            // Home try zone (Phase 16: Y extent for 3D detection)
             field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
                 Vec3(-half_l - try_d, 0.0f, -half_w),
-                Vec3(-half_l,         0.0f,  half_w));
+                Vec3(-half_l,         geo.goal_height,  half_w));
             // Away try zone
             field.add_semantic_zone(ZoneSemantic::SCORING_TARGET,
                 Vec3(half_l,           0.0f, -half_w),
-                Vec3(half_l + try_d,   0.0f,  half_w));
+                Vec3(half_l + try_d,   geo.goal_height,  half_w));
             break;
         }
         default:
@@ -1453,24 +1459,95 @@ struct SceneState {
     }
 
     // =========================================================================
-    // update_match_flow — Referee / clock system (Phase 15 Action 1)
+    // evaluate_spatial_rules — Check ball position against field zones (Phase 16)
+    // =========================================================================
+    // Called every frame during LIVE_PLAY. Detects two spatial events:
+    //
+    //   1. SCORING: Ball enters a SCORING_TARGET zone. The goal direction is
+    //      determined by the X-axis (field length axis). Goals at +X = away
+    //      goal (Home scores), goals at -X = home goal (Away scores).
+    //   2. OUT_OF_BOUNDS: Ball leaves the playing surface. Triggers a dead-ball
+    //      stoppage with a shorter delay than a goal celebration.
+    //
+    // On detection, transitions to SCORING_EVENT or DEAD_BALL state and
+    // starts the post_event_timer. The caller (update_match_flow) handles
+    // the timer countdown and eventual reset.
+    // =========================================================================
+    void evaluate_spatial_rules()
+    {
+        const BallEntity* ball = entity_manager.find_ball();
+        if (!ball || !ball->id.is_valid()) return;
+
+        ZoneSemantic ball_zone = field.get_zone_at(ball->position);
+
+        // 1. SCORING DETECTION
+        if (ball_zone == ZoneSemantic::SCORING_TARGET) {
+            // Goals are placed along the X-axis (field length).
+            // Home attacks +X direction → ball in +X goal = Home scores.
+            // Away attacks -X direction → ball in -X goal = Away scores.
+            if (ball->position.x > 0.0f) {
+                // Ball is in the +X goal zone → Home Team scored
+                home_score++;
+std::printf("\n[REFEREE] GOAL! Home Team Scores! (Total: %u - %u)\n", home_score, away_score);
+            } else {
+                // Ball is in the -X goal zone → Away Team scored
+                away_score++;
+std::printf("\n[REFEREE] GOAL! Away Team Scores! (Total: %u - %u)\n", home_score, away_score);
+            }
+
+            // Halt play, trigger celebration delay, then reset
+            rules.current_state = SemanticPlayState::SCORING_EVENT;
+            post_event_timer = 3.0f; // 3-second celebration before kickoff
+            return;
+        }
+
+        // 2. OUT OF BOUNDS DETECTION
+        if (ball_zone == ZoneSemantic::OUT_OF_BOUNDS) {
+std::printf("\n[REFEREE] Whistle! Ball is Out of Bounds.\n");
+            rules.current_state = SemanticPlayState::DEAD_BALL;
+            post_event_timer = 2.0f; // 2-second delay before throw-in
+            return;
+        }
+    }
+
+    // =========================================================================
+    // update_match_flow — Referee / clock system (Phase 15 Action 1, Phase 16)
     // =========================================================================
     // The clock only advances during LIVE_PLAY. When the period expires,
-    // the state transitions to INTERMISSION automatically. The AI reads
-    // rules.current_state on its next perception tick and naturally stops
-    // chasing the ball (CHASE_BALL scores 0.0f during non-live states).
+    // the state transitions to INTERMISSION automatically.
     //
-    // The match_time_seconds counter is a global continuous tracker that
-    // only increments while the clock is running — this ensures accurate
-    // game time regardless of frame rate or physics micro-stutters.
+    // Phase 16 additions:
+    //   - SCORING_EVENT and DEAD_BALL states now count down post_event_timer.
+    //   - When the timer expires, formations are reset and the state drops to
+    //     PRE_GAME, awaiting a [K] key press to resume live play.
+    //   - During LIVE_PLAY, evaluate_spatial_rules() is called each frame to
+    //     detect goal-scoring and out-of-bounds events from the ball's zone.
     // =========================================================================
     void update_match_flow(float dt)
     {
         auto& state = rules.current_state;
 
+        // --- Transition States (Waiting to resume) ---
+        // SCORING_EVENT: 3-second celebration countdown after a goal
+        // DEAD_BALL: 2-second stoppage before throw-in/kickoff
+        if (state == SemanticPlayState::SCORING_EVENT ||
+            state == SemanticPlayState::DEAD_BALL) {
+            post_event_timer -= dt;
+            if (post_event_timer <= 0.0f) {
+                reset_match_positions();
+                state = SemanticPlayState::PRE_GAME;
+std::printf("\n[REFEREE] Formations reset. Waiting for Kickoff...\n");
+            }
+            return;
+        }
+
+        // --- Active Play State ---
         if (state == SemanticPlayState::LIVE_PLAY) {
             period_time_seconds += dt;
             match_time_seconds  += dt;
+
+            // Constantly check if the ball triggered a spatial event
+            evaluate_spatial_rules();
 
             // End of period detection
             if (period_time_seconds >= max_period_duration) {
@@ -1478,9 +1555,11 @@ struct SceneState {
                 if (current_period >= total_periods) {
                     // Full time — all periods played
                     state = SemanticPlayState::INTERMISSION;
+std::printf("\n[REFEREE] Full Time!\n");
                 } else {
                     // Between periods (half-time, quarter break, etc.)
                     state = SemanticPlayState::INTERMISSION;
+std::printf("\n[REFEREE] End of Period %u!\n", current_period);
                 }
             }
         }
@@ -1592,6 +1671,7 @@ struct SceneState {
         possession_timer     = 0.0f;
         ball_in_play         = 0u; // Ball not in play until next kickoff
         out_of_bounds_timer  = 0.0f;
+        post_event_timer     = 0.0f;
 
         // 4. Clear AI spatial memory so perception evaluates fresh layout
         perception_buffer.clear();

@@ -831,6 +831,9 @@ void SDL2Application::draw_hud() {
         case SemanticPlayState::LIVE_PLAY:
             SDL_SetRenderDrawColor(renderer_, 50, 220, 50, 255);  // Green = live
             break;
+        case SemanticPlayState::SCORING_EVENT:
+            SDL_SetRenderDrawColor(renderer_, 255, 215, 0, 255);  // Gold = goal scored
+            break;
         case SemanticPlayState::DEAD_BALL:
             SDL_SetRenderDrawColor(renderer_, 220, 180, 40, 255);  // Yellow = dead ball
             break;
@@ -893,11 +896,13 @@ void SDL2Application::draw_hud() {
             switch (app_.scene.rules.current_state) {
             case SemanticPlayState::LIVE_PLAY:      state_str = "LIVE"; break;
             case SemanticPlayState::DEAD_BALL:      state_str = "DEAD_BALL"; break;
+            case SemanticPlayState::SCORING_EVENT:  state_str = "GOAL!"; break;
             case SemanticPlayState::INTERMISSION:   state_str = "INTERMISSION"; break;
             default: break;
             }
-            std::printf("\r[HUD] Period %u | %02d:%02d | %s          ",
-                        app_.scene.current_period, m, s, state_str);
+            std::printf("\r[HUD] Period %u | %02d:%02d | %s | Score: %u - %u          ",
+                        app_.scene.current_period, m, s, state_str,
+                        app_.scene.home_score, app_.scene.away_score);
             std::fflush(stdout);
         }
     }

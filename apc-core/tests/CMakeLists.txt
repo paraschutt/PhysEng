@@ -305,3 +305,10 @@ add_test(NAME Sprint31MatchClockManagement COMMAND test_sprint31)
 add_executable(test_sprint32 correctness/test_sprint32.cpp)
 target_link_libraries(test_sprint32 PRIVATE apc_core)
 add_test(NAME Sprint32ResetLogic COMMAND test_sprint32)
+
+# ---------------------------------------------------------
+# Sprint 33 Tests — Phase 16 Action 1: Spatial Event Triggers
+# ---------------------------------------------------------
+add_executable(test_sprint33 correctness/test_sprint33.cpp)
+target_link_libraries(test_sprint33 PRIVATE apc_core)
+add_test(NAME Sprint33SpatialEventTriggers COMMAND test_sprint33)
