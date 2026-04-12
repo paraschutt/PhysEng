@@ -250,3 +250,16 @@ add_test(NAME Sprint26Correctness COMMAND test_sprint26)
 add_executable(test_sprint27 correctness/test_sprint27.cpp)
 target_link_libraries(test_sprint27 PRIVATE apc_core)
 add_test(NAME Sprint27Correctness COMMAND test_sprint27)
+
+# ---------------------------------------------------------
+# Step 3 Integration Tests — App-Layer Coverage
+# ---------------------------------------------------------
+# AI Steering: pursue/evade/alignment/separation/cohesion math validation
+add_executable(test_ai_steering integration/test_ai_steering.cpp)
+target_link_libraries(test_ai_steering PRIVATE apc_core)
+add_test(NAME AISteeringIntegration COMMAND test_ai_steering)
+
+# Game Loop: fixed-timestep accumulator, pause/resume, time scaling, pipeline order
+add_executable(test_game_loop integration/test_game_loop.cpp)
+target_link_libraries(test_game_loop PRIVATE apc_core)
+add_test(NAME GameLoopIntegration COMMAND test_game_loop)
