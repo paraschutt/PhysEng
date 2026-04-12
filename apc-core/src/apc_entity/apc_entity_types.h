@@ -188,6 +188,12 @@ struct AthleteEntity {
     float sprint_cooldown  = 0.0f;
     float tackle_cooldown  = 0.0f;
 
+    // --- Formation home position (Phase 15 Action 2) ---
+    // Set during spawn_team() from formation system. Used by
+    // reset_match_positions() to teleport athletes back to their
+    // sport-specific starting coordinates after a goal or period break.
+    Vec3 home_position = { 0.0f, 0.0f, 0.0f };
+
     // --- AI Hysteresis: Action commitment tracking (Phase 11b Action 5) ---
     // Records the AIActionType of the action chosen on the previous frame.
     // The UtilityAI evaluate_with_hysteresis() method applies a 15%
@@ -228,6 +234,7 @@ struct AthleteEntity {
         is_active       = 0;
         sprint_cooldown  = 0.0f;
         tackle_cooldown  = 0.0f;
+        home_position    = { 0.0f, 0.0f, 0.0f };
         active_action_id = 0xFFFFFFFFu;
         reaction_frames  = 12u;
         unique_id        = 0u;

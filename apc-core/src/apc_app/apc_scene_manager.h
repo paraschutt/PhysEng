@@ -317,6 +317,11 @@ struct SceneState {
 
             entity_manager.spawn_athlete(team, pos.compatible_role,
                                           world_pos, i + 1);
+
+            // Phase 15 Action 2: Store home position for deterministic reset.
+            // The last spawned athlete is at index athlete_count - 1.
+            uint32_t idx = entity_manager.athlete_count - 1u;
+            entity_manager.athletes[idx].home_position = world_pos;
         }
     }
 
@@ -1529,10 +1534,81 @@ struct SceneState {
     }
 
     // =========================================================================
-    // reset_match — Reset positions, scores, time
+    // reset_match_positions — Deterministic teleport routine (Phase 15 Action 2)
+    // =========================================================================
+    // Three-phase reset used after goals, period breaks, or manual hot-key:
+    //
+    //   1. Spatial Teleport:  Ball to center, athletes to home_position
+    //   2. Kinematic Wipe:    Zero all linear/angular velocities
+    //   3. Cognitive Wipe:    Clear intents, action IDs, perception buffer,
+    //                         influence map so AI evaluates the new layout
+    //                         cleanly instead of resuming stale plans.
+    //
+    // Does NOT reset scores or clock — use reset_match() for that.
+    // =========================================================================
+    void reset_match_positions()
+    {
+        if (!is_loaded) return;
+
+        // 1. Ball: teleport to center, wipe kinematics + possession
+        BallEntity* ball = entity_manager.find_ball();
+        if (ball && ball->id.is_valid()) {
+            ball->position        = { 0.0f, ball->radius, 0.0f };
+            ball->velocity        = { 0.0f, 0.0f, 0.0f };
+            ball->angular_velocity = { 0.0f, 0.0f, 0.0f };
+            ball->orientation     = Quat::identity();
+            ball->last_toucher    = EntityId::make_invalid();
+            ball->possession_team = TEAM_NONE;
+            ball->is_in_play      = 0;
+        }
+
+        // 2. Athletes: spatial teleport + kinematic + cognitive wipe
+        for (uint32_t i = 0u; i < entity_manager.athlete_count; ++i) {
+            AthleteEntity& a = entity_manager.athletes[i];
+            if (!a.id.is_valid() || !a.is_active) continue;
+
+            // A. Spatial Teleport: return to formation home position
+            a.position    = a.home_position;
+            a.orientation = Quat::identity();
+
+            // B. Kinematic Wipe: zero all motion state
+            a.velocity     = { 0.0f, 0.0f, 0.0f };
+            a.acceleration = { 0.0f, 0.0f, 0.0f };
+
+            // C. Cognitive Wipe: clear motor intent and AI action state
+            a.current_intent.reset();
+            a.previous_intent.reset();
+            a.flags           = 0u;
+            a.active_action_id = 0xFFFFFFFFu;
+            a.stamina = 1.0f;
+            a.health  = 1.0f;
+            a.sprint_cooldown = 0.0f;
+            a.tackle_cooldown = 0.0f;
+        }
+
+        // 3. Clear scene-level possession tracking
+        last_ball_toucher   = EntityId::make_invalid();
+        last_possession_team = TEAM_NONE;
+        possession_timer     = 0.0f;
+        ball_in_play         = 0u; // Ball not in play until next kickoff
+        out_of_bounds_timer  = 0.0f;
+
+        // 4. Clear AI spatial memory so perception evaluates fresh layout
+        perception_buffer.clear();
+        influence_map.clear();
+
+        // 5. Reset AI controllers to avoid stale steering targets
+        for (uint32_t i = 0u; i < MAX_AI_CONTROLLERS; ++i) {
+            ai_controllers[i].reset();
+        }
+    }
+
+    // =========================================================================
+    // reset_match — Reset positions, scores, time, and full state
     // =========================================================================
     void reset_match()
     {
+        // Reset scoreboard and clock
         home_score          = 0u;
         away_score          = 0u;
         match_time_seconds  = 0.0f;
@@ -1541,26 +1617,8 @@ struct SceneState {
         rules.current_state = SemanticPlayState::PRE_GAME;
         // Note: GameLoop reset is done by Application, not here.
 
-        // Reset all athletes to initial positions
-        for (uint32_t i = 0u; i < entity_manager.athlete_count; ++i) {
-            AthleteEntity& a = entity_manager.athletes[i];
-            if (!a.id.is_valid()) continue;
-            a.velocity = { 0.0f, 0.0f, 0.0f };
-            a.current_intent.reset();
-            a.stamina = 1.0f;
-            a.health  = 1.0f;
-            a.sprint_cooldown = 0.0f;
-            a.tackle_cooldown = 0.0f;
-        }
-
-        // Reset ball
-        for (uint32_t i = 0u; i < entity_manager.ball_count; ++i) {
-            BallEntity& b = entity_manager.balls[i];
-            if (!b.id.is_valid()) continue;
-            b.velocity = { 0.0f, 0.0f, 0.0f };
-            b.angular_velocity = { 0.0f, 0.0f, 0.0f };
-            b.position = { 0.0f, 0.11f, 0.0f };
-        }
+        // Delegate physical + cognitive reset to the teleport routine
+        reset_match_positions();
     }
 
     // =========================================================================

@@ -129,6 +129,10 @@ void SDL2Application::switch_sport(SportModuleType type) {
 
     app_.load_match(match_cfg);
 
+    // 2b. Phase 15 Action 2: Reset positions to ensure clean formation
+    //     alignment (load_match sets home_position during spawn_team).
+    app_.scene.reset_match_positions();
+
     // 3. Mark first home athlete as human-controlled
     const EntityManager& em = app_.scene.entity_manager;
     if (em.athlete_count > 0 && em.athletes[0].id.is_valid()) {
@@ -238,6 +242,12 @@ void SDL2Application::process_events() {
             }
             if (event.key.keysym.sym == SDLK_l) {
                 app_.scene.rules.current_state = SemanticPlayState::DEAD_BALL;
+            }
+            // Phase 15 Action 2: Reset formations (teleport + cognitive wipe)
+            if (event.key.keysym.sym == SDLK_r) {
+                app_.scene.reset_match_positions();
+                app_.scene.rules.current_state = SemanticPlayState::PRE_GAME;
+                std::printf("[APC SDL2] Positions reset — press K to start play\n");
             }
             break;
 
@@ -920,7 +930,7 @@ int main(int argc, char* argv[]) {
     (void)argv;
 
     std::printf("=== APC Physics Engine — Vertical Slice ===\n");
-    std::printf("Controls: Arrows=Pan, Scroll=Zoom, WASD=Player, Space=Pause, 1/2=Sport, K=Play, L=DeadBall, Esc=Quit\n\n");
+    std::printf("Controls: Arrows=Pan, Scroll=Zoom, WASD=Player, Space=Pause, 1/2=Sport, K=Play, L=DeadBall, R=Reset, Esc=Quit\n\n");
 
     apc::SDL2Application app;
 

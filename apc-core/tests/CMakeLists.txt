@@ -298,3 +298,10 @@ add_test(NAME Sprint30MultiSportSandbox COMMAND test_sprint30)
 add_executable(test_sprint31 correctness/test_sprint31.cpp)
 target_link_libraries(test_sprint31 PRIVATE apc_core)
 add_test(NAME Sprint31MatchClockManagement COMMAND test_sprint31)
+
+# ---------------------------------------------------------
+# Sprint 32 Tests — Phase 15 Action 2: The Reset Logic
+# ---------------------------------------------------------
+add_executable(test_sprint32 correctness/test_sprint32.cpp)
+target_link_libraries(test_sprint32 PRIVATE apc_core)
+add_test(NAME Sprint32ResetLogic COMMAND test_sprint32)
