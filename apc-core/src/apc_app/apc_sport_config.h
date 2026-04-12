@@ -45,6 +45,23 @@ enum class SportModuleType : uint8_t {
 };
 
 // =============================================================================
+// FormationTopology — How a sport maps athletes to role slots
+// =============================================================================
+// Phase 11b Action 4: Topology-Aware Role System
+//
+//   - FLUID_INVASION:  Dynamic proximity-based swapping (Soccer, Hockey, Rugby)
+//                      Players cover for out-of-position teammates.
+//   - STRICT_PLAYBOOK: Locked roles, no swapping mid-play (American Football, Baseball)
+//                      Players execute assigned routes only.
+//   - COURT_ZONAL:     Locked to spatial zones/rotation (Tennis, Volleyball)
+// =============================================================================
+enum class FormationTopology : uint8_t {
+    FLUID_INVASION,
+    STRICT_PLAYBOOK,
+    COURT_ZONAL
+};
+
+// =============================================================================
 // SportModuleConfig — Data payload to initialize a full match
 // =============================================================================
 // Bridges the semantic rules engine (SportRulesConfig) with the AI system.
@@ -52,8 +69,9 @@ enum class SportModuleType : uint8_t {
 // data (zone extents) and Physics data (ball shape, gravity, restitution).
 // =============================================================================
 struct SportModuleConfig {
-    SportModuleType   module_type = SportModuleType::SOCCER;
-    SportRulesConfig  rules;
+    SportModuleType    module_type = SportModuleType::SOCCER;
+    FormationTopology  topology    = FormationTopology::FLUID_INVASION;
+    SportRulesConfig   rules;
 };
 
 } // namespace apc

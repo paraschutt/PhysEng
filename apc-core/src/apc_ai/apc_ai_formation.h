@@ -25,8 +25,10 @@
 // =============================================================================
 
 #include "apc_entity/apc_entity_types.h"
+#include "apc_entity/apc_entity_manager.h"  // EntityManager (Phase 11b Action 4)
 #include "apc_math/apc_vec3.h"
 #include "apc_math/apc_math_common.h"
+#include "apc_app/apc_sport_config.h"   // FormationTopology (Phase 11b Action 4)
 #include <cstdint>
 #include <cmath>
 
@@ -560,6 +562,223 @@ private:
         case FormationType::FORMATION_4_2_3_1: return preset_4_2_3_1();
         case FormationType::FORMATION_4_4_2:
         default: return preset_4_4_2();
+        }
+    }
+};
+
+// =============================================================================
+// [LEGACY] FormationSystem above is soccer-specific (SportRole, hardcoded presets).
+// The following types are the Phase 11b semantic replacement:
+//   RoleSlot              — Generic role slot (sport-agnostic)
+//   TopologyFormationSystem — Topology-aware assignment (Fluid / Playbook / Zonal)
+// =============================================================================
+
+// =============================================================================
+// RoleSlot — Generic role slot replacing hardcoded "STRIKER" or "DEFENDER"
+// =============================================================================
+// Phase 11b Action 4: Topology-Aware Role System
+//
+// Each slot represents a tactical position in the team structure. The
+// semantic_role_id is defined by the specific sport module (e.g. soccer
+// might map 0=GK, 1=CB, etc., basketball might map 0=PG, 1=SG, etc.).
+//
+// assigned_entity tracks which AthleteEntity currently occupies this slot.
+// stickiness_bonus provides hysteresis to prevent rapid swapping when
+// two players are nearly equidistant from a slot target.
+// =============================================================================
+struct RoleSlot {
+    uint32_t semantic_role_id = 0u;     // Defined by the specific sport module
+    uint32_t team_id          = 0u;     // Team this slot belongs to
+    Vec3     current_target_pos = {0.0f, 0.0f, 0.0f}; // Tactical target position
+
+    EntityId assigned_entity  = EntityId::make_invalid(); // Who is currently playing this role
+    float    stickiness_bonus = 4.0f;   // Hysteresis distance (meters) to prevent rapid swapping
+};
+
+// =============================================================================
+// TopologyFormationSystem — Topology-aware role assignment system
+// =============================================================================
+// Phase 11b Action 4: Topology-Aware Role System
+//
+// Uses the FormationTopology to dictate how athletes are mapped to role slots:
+//   - FLUID_INVASION:  Runs a greedy distance-matching algorithm to
+//                      dynamically swap players into optimal structural slots.
+//                      Called infrequently (~every 0.5s / 30 frames) to save CPU.
+//   - STRICT_PLAYBOOK: Assignments are locked. No swapping mid-play.
+//   - COURT_ZONAL:     Assignments locked to spatial zones/rotation.
+//
+// Design:
+//   - Header-only, zero dynamic allocation
+//   - Deterministic greedy matching (fixed iteration order)
+//   - Bitwise assignment mask to prevent double-booking
+//   - Integrates with EntityManager::for_each_ai() for fast iteration
+// =============================================================================
+class TopologyFormationSystem {
+public:
+    static constexpr uint32_t MAX_SLOTS = 22; // 11v11 max
+
+private:
+    RoleSlot          slots[MAX_SLOTS];
+    uint32_t          slot_count       = 0u;
+    FormationTopology active_topology  = FormationTopology::FLUID_INVASION;
+
+public:
+    // --- Initialize the topology mode ---
+    void initialize_topology(FormationTopology topology) {
+        active_topology = topology;
+    }
+
+    FormationTopology get_topology() const { return active_topology; }
+
+    // --- Slot management ---
+    void clear_slots() {
+        slot_count = 0u;
+    }
+
+    void add_slot(uint32_t role_id, uint32_t team_id, EntityId initial_entity) {
+        if (slot_count < MAX_SLOTS) {
+            slots[slot_count].semantic_role_id = role_id;
+            slots[slot_count].team_id          = team_id;
+            slots[slot_count].current_target_pos = {0.0f, 0.0f, 0.0f};
+            slots[slot_count].assigned_entity  = initial_entity;
+            slots[slot_count].stickiness_bonus = 4.0f;
+            ++slot_count;
+        }
+    }
+
+    // --- Accessors ---
+    uint32_t get_slot_count() const { return slot_count; }
+
+    const RoleSlot* get_slot(uint32_t index) const {
+        if (index >= slot_count) return nullptr;
+        return &slots[index];
+    }
+
+    RoleSlot* get_slot_mutable(uint32_t index) {
+        if (index >= slot_count) return nullptr;
+        return &slots[index];
+    }
+
+    // =========================================================================
+    // update_slot_targets — Shift the formation block based on ball position
+    // =========================================================================
+    // Adjusts current_target_pos for all slots. The ball_pos and field_center
+    // drive the formation shift up/down the field. Concrete offset logic
+    // depends on the sport module's tactical rules.
+    // =========================================================================
+    void update_slot_targets(const Vec3& ball_pos, const Vec3& field_center) {
+        for (uint32_t i = 0u; i < slot_count; ++i) {
+            // Shift formation block toward ball along the X axis (attack/defend)
+            // Scale factor: formation shifts proportionally to ball offset from center
+            float ball_offset = ball_pos.x - field_center.x;
+            float shift_scale = ball_offset * 0.3f; // 30% of ball offset
+
+            Vec3 target = slots[i].current_target_pos;
+            target.x += shift_scale;
+            target.y  = 0.0f; // Ground level
+            slots[i].current_target_pos = target;
+        }
+    }
+
+    // =========================================================================
+    // evaluate_assignments — Execute topology-specific assignment rules
+    // =========================================================================
+    // For STRICT_PLAYBOOK and COURT_ZONAL: do nothing (roles locked at init).
+    // For FLUID_INVASION: run greedy distance-matching to swap players into
+    // optimal structural slots.
+    // =========================================================================
+    void evaluate_assignments(EntityManager& entities) {
+        if (active_topology == FormationTopology::STRICT_PLAYBOOK ||
+            active_topology == FormationTopology::COURT_ZONAL) {
+            // Roles are strictly locked to the IDs assigned at the start
+            // of the play or match. No swapping.
+            return;
+        }
+
+        if (active_topology == FormationTopology::FLUID_INVASION) {
+            evaluate_fluid_swaps(entities);
+        }
+    }
+
+    // =========================================================================
+    // reset — Clear all state
+    // =========================================================================
+    void reset() {
+        slot_count = 0u;
+        active_topology = FormationTopology::FLUID_INVASION;
+        for (uint32_t i = 0u; i < MAX_SLOTS; ++i) {
+            slots[i] = RoleSlot();
+        }
+    }
+
+private:
+    // =========================================================================
+    // evaluate_fluid_swaps — Greedy distance-matching for dynamic swapping
+    // =========================================================================
+    // Algorithm:
+    //   1. For each slot, iterate all active AI entities on the same team.
+    //   2. Skip entities already assigned to another slot this cycle (bitwise mask).
+    //   3. Compute distance^2 from entity position to slot target.
+    //   4. Apply hysteresis: currently assigned entity gets a stickiness bonus
+    //      so they don't swap due to tiny distance differences.
+    //   5. Lock in the best (closest) candidate.
+    //
+    // Complexity: O(slot_count * active_ai_entities)
+    // Performance note: Should be called every ~30 frames (0.5s at 60Hz),
+    // not every single tick.
+    // =========================================================================
+    void evaluate_fluid_swaps(EntityManager& entities) {
+        // Track who has been assigned this cycle to prevent double-booking
+        uint64_t assigned_mask[CHUNK_COUNT] = {};
+
+        // For each slot, find the best fit
+        for (uint32_t i = 0u; i < slot_count; ++i) {
+            RoleSlot& slot = slots[i];
+
+            float    best_dist_sq  = 999999.0f;
+            EntityId best_candidate = EntityId::make_invalid();
+
+            // Fast bitwise iteration over active AI entities
+            entities.for_each_ai([&](const AthleteEntity& entity) {
+                // Wrong team check: TeamId is uint8_t, slot.team_id is uint32_t
+                if (static_cast<uint32_t>(entity.team) != slot.team_id) return;
+
+                // Already assigned to another slot this cycle
+                uint32_t chunk = entity.id.index / 64u;
+                uint32_t bit   = entity.id.index % 64u;
+                if (chunk < CHUNK_COUNT &&
+                    (assigned_mask[chunk] & (1ULL << bit)) != 0u) return;
+
+                // Use entity position as proxy for distance to slot target.
+                // (MotorIntent has no aim_target; position is the canonical
+                //  world-space location for structural distance matching.)
+                Vec3 delta = entity.position - slot.current_target_pos;
+                float dist_sq = Vec3::length_sq(delta);
+
+                // Hysteresis: give the currently assigned player a distance
+                // advantage so they don't swap just because a teammate ran
+                // 0.1m closer to the slot.
+                if (entity.id.index == slot.assigned_entity.index &&
+                    entity.id.generation == slot.assigned_entity.generation) {
+                    float bonus = slot.stickiness_bonus * slot.stickiness_bonus;
+                    dist_sq -= bonus;
+                }
+
+                if (dist_sq < best_dist_sq) {
+                    best_dist_sq  = dist_sq;
+                    best_candidate = entity.id;
+                }
+            });
+
+            // Lock in the assignment
+            if (best_candidate.is_valid()) {
+                slot.assigned_entity = best_candidate;
+                uint32_t c_chunk = best_candidate.index / 64u;
+                uint32_t c_bit   = best_candidate.index % 64u;
+                if (c_chunk < CHUNK_COUNT) {
+                    assigned_mask[c_chunk] |= (1ULL << c_bit);
+                }
+            }
         }
     }
 };
