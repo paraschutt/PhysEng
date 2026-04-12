@@ -445,8 +445,8 @@ static int test_sport_type_enum() {
     assert(static_cast<uint8_t>(apc::SportType::SOCCER)            == 0);
     assert(static_cast<uint8_t>(apc::SportType::BASKETBALL)        == 1);
     assert(static_cast<uint8_t>(apc::SportType::AMERICAN_FOOTBALL)  == 2);
-    assert(static_cast<uint8_t>(apc::SportType::RUGBY)             == 3);
-    assert(static_cast<uint8_t>(apc::SportType::HOCKEY)            == 4);
+    assert(static_cast<uint8_t>(apc::SportType::RUGBY_UNION)       == 3);
+    assert(static_cast<uint8_t>(apc::SportType::ICE_HOCKEY)        == 9);
 
     std::printf("    [PASS] SportType enum values verified\n");
     return 0;

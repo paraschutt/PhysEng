@@ -456,6 +456,33 @@ struct UtilityAI {
         }
     }
 
+    // =========================================================================
+    // clear_actions — Wipes the AI's action memory for sport transitions
+    // =========================================================================
+    // When switching sports (e.g., soccer -> basketball), call this first
+    // then use add_action() to inject only the actions relevant to the new
+    // sport. This guarantees the AI will never try to execute a CROSS or
+    // SLIDE_TACKLE on a basketball court.
+    // =========================================================================
+    void clear_actions()
+    {
+        action_count = 0u;
+    }
+
+    // =========================================================================
+    // add_action — Register a single action for evaluation
+    // =========================================================================
+    // Called by SceneManager::load_sport_configuration() to inject the
+    // sport-specific subset of actions. Memory remains statically allocated;
+    // only the count grows. Truncated at MAX_ACTIONS.
+    // =========================================================================
+    void add_action(AIActionType action)
+    {
+        if (action_count < MAX_ACTIONS) {
+            actions[action_count++] = action;
+        }
+    }
+
     // --- Reset all state ---
     void reset()
     {

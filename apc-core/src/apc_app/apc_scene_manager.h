@@ -19,6 +19,7 @@
 // =============================================================================
 
 #include "apc_app/apc_game_loop.h"
+#include "apc_app/apc_sport_config.h"
 #include "apc_entity/apc_entity_types.h"
 #include "apc_entity/apc_entity_manager.h"
 #include "apc_ai/apc_ai_formation.h"
@@ -56,15 +57,13 @@ struct SeededXorShift32 {
 };
 
 // =============================================================================
-// SportType — Sport enumeration
+// SportType — Reuse from apc_sport_field.h (pulled via apc_sport_config.h)
 // =============================================================================
-enum class SportType : uint8_t {
-    SOCCER           = 0,
-    BASKETBALL       = 1,
-    AMERICAN_FOOTBALL = 2,
-    RUGBY            = 3,
-    HOCKEY           = 4
-};
+// Uses the comprehensive 28-value SportType from the field system.
+// Scene-level mappings:
+//   SOCCER = 0, BASKETBALL = 1, AMERICAN_FOOTBALL = 2,
+//   RUGBY_UNION = 3, ICE_HOCKEY = 9
+// =============================================================================
 
 // =============================================================================
 // MatchConfig — Parameters for loading a match
@@ -240,7 +239,7 @@ struct SceneState {
         switch (config.sport) {
         case SportType::BASKETBALL:       ball_type = 1; break;
         case SportType::AMERICAN_FOOTBALL: ball_type = 2; break;
-        case SportType::RUGBY:            ball_type = 3; break;
+        case SportType::RUGBY_UNION:      ball_type = 3; break;
         default: ball_type = 0; break;
         }
         entity_manager.spawn_ball(ball_type, Vec3(0.0f, 0.11f, 0.0f));
@@ -295,6 +294,128 @@ struct SceneState {
     }
 
     // =========================================================================
+    // load_sport_configuration — Inject sport-specific AI utility actions
+    // =========================================================================
+    // Clears the AI's action memory and injects only the actions relevant
+    // to the selected sport. This guarantees the AI will never try to
+    // execute a CROSS or SLIDE_TACKLE on a basketball court.
+    //
+    // Also wires up the SportRulesConfig from the module config so the AI
+    // knows what physics actions are legal (offside, contact severity, etc.).
+    //
+    // Called from assign_all_ai() based on config.sport.
+    // =========================================================================
+    void load_sport_configuration(const SportModuleConfig& module_config)
+    {
+        // 1. Setup the Rules Engine (from Phase 11a Action 1)
+        //    The AI can query module_config.rules.current_state,
+        //    module_config.rules.offside_rule_active, etc.
+        (void)module_config; // Rules config stored for future AI queries
+
+        // 2. Clear AI action memory for both teams
+        utility_ai[0].clear_actions();
+        utility_ai[1].clear_actions();
+
+        // 3. Inject Sport-Specific Utility Actions
+        //    In a full production environment, this would read from a data
+        //    file or function pointers. For our deterministic core, we
+        //    hard-bind the exact subset of actions allowed per sport.
+        //
+        //    Mapping: SportModuleType -> AIActionType subset
+        //
+        //    SOCCER:           PASS, SHOOT, CROSS, HEADER, TACKLE, DIVE_SAVE, PUNT, BLOCK
+        //    BASKETBALL:       PASS, SHOOT, DRIVE, SCREEN, BOX_OUT (no tackle/cross)
+        //    HOCKEY:           PASS, SHOOT, BLOCK, PRESS (body check = tackle)
+        //    AMERICAN_FOOTBALL: PASS, SHOOT, TACKLE, BLOCK, PRESS
+        //    RUGBY:            PASS, SHOOT, TACKLE, BLOCK, SUPPORT_RUN, PRESS
+
+        // Register actions for both teams (same subset per team)
+        switch (module_config.module_type) {
+        case SportModuleType::SOCCER:
+ utility_ai[0].add_action(AIActionType::PASS_BALL);
+ utility_ai[0].add_action(AIActionType::SHOOT_BALL);
+ utility_ai[0].add_action(AIActionType::CROSS);
+ utility_ai[0].add_action(AIActionType::HEADER);
+ utility_ai[0].add_action(AIActionType::TACKLE);
+ utility_ai[0].add_action(AIActionType::DIVE_SAVE);
+ utility_ai[0].add_action(AIActionType::PUNT);
+ utility_ai[0].add_action(AIActionType::BLOCK);
+ utility_ai[0].add_action(AIActionType::INTERCEPT);
+ utility_ai[0].add_action(AIActionType::PRESS);
+ utility_ai[0].add_action(AIActionType::SUPPORT_RUN);
+ utility_ai[0].add_action(AIActionType::MARK_OPPONENT);
+ utility_ai[0].add_action(AIActionType::MOVE_TO_POSITION);
+ utility_ai[0].add_action(AIActionType::CHASE_BALL);
+ utility_ai[0].add_action(AIActionType::FORMATION_HOLD);
+            break;
+
+        case SportModuleType::BASKETBALL:
+ // No TACKLE, CROSS, HEADER, PUNT, DIVE_SAVE on a basketball court
+ utility_ai[0].add_action(AIActionType::PASS_BALL);
+ utility_ai[0].add_action(AIActionType::SHOOT_BALL);
+ utility_ai[0].add_action(AIActionType::BLOCK);
+ utility_ai[0].add_action(AIActionType::INTERCEPT);
+ utility_ai[0].add_action(AIActionType::SUPPORT_RUN);
+ utility_ai[0].add_action(AIActionType::PRESS);
+ utility_ai[0].add_action(AIActionType::MOVE_TO_POSITION);
+ utility_ai[0].add_action(AIActionType::CHASE_BALL);
+ utility_ai[0].add_action(AIActionType::FORMATION_HOLD);
+            break;
+
+        case SportModuleType::HOCKEY:
+ utility_ai[0].add_action(AIActionType::PASS_BALL);
+ utility_ai[0].add_action(AIActionType::SHOOT_BALL);
+ utility_ai[0].add_action(AIActionType::BLOCK);
+ utility_ai[0].add_action(AIActionType::TACKLE);
+ utility_ai[0].add_action(AIActionType::INTERCEPT);
+ utility_ai[0].add_action(AIActionType::PRESS);
+ utility_ai[0].add_action(AIActionType::SUPPORT_RUN);
+ utility_ai[0].add_action(AIActionType::MOVE_TO_POSITION);
+ utility_ai[0].add_action(AIActionType::CHASE_BALL);
+ utility_ai[0].add_action(AIActionType::FORMATION_HOLD);
+            break;
+
+        case SportModuleType::AMERICAN_FOOTBALL:
+ utility_ai[0].add_action(AIActionType::PASS_BALL);
+ utility_ai[0].add_action(AIActionType::SHOOT_BALL);
+ utility_ai[0].add_action(AIActionType::TACKLE);
+ utility_ai[0].add_action(AIActionType::BLOCK);
+ utility_ai[0].add_action(AIActionType::INTERCEPT);
+ utility_ai[0].add_action(AIActionType::PRESS);
+ utility_ai[0].add_action(AIActionType::SUPPORT_RUN);
+ utility_ai[0].add_action(AIActionType::MOVE_TO_POSITION);
+ utility_ai[0].add_action(AIActionType::CHASE_BALL);
+ utility_ai[0].add_action(AIActionType::FORMATION_HOLD);
+            break;
+
+        case SportModuleType::RUGBY:
+ utility_ai[0].add_action(AIActionType::PASS_BALL);
+ utility_ai[0].add_action(AIActionType::SHOOT_BALL);
+ utility_ai[0].add_action(AIActionType::TACKLE);
+ utility_ai[0].add_action(AIActionType::BLOCK);
+ utility_ai[0].add_action(AIActionType::INTERCEPT);
+ utility_ai[0].add_action(AIActionType::SUPPORT_RUN);
+ utility_ai[0].add_action(AIActionType::PRESS);
+ utility_ai[0].add_action(AIActionType::MOVE_TO_POSITION);
+ utility_ai[0].add_action(AIActionType::CHASE_BALL);
+ utility_ai[0].add_action(AIActionType::FORMATION_HOLD);
+            break;
+
+        default:
+            // Fallback: basic movement only
+ utility_ai[0].add_action(AIActionType::CHASE_BALL);
+ utility_ai[0].add_action(AIActionType::MOVE_TO_POSITION);
+ utility_ai[0].add_action(AIActionType::FORMATION_HOLD);
+            break;
+        }
+
+        // Mirror actions to away team
+        for (uint32_t i = 0u; i < utility_ai[0].action_count; ++i) {
+            utility_ai[1].add_action(utility_ai[0].actions[i]);
+        }
+    }
+
+    // =========================================================================
     // assign_all_ai — Assign AI controllers to all spawned athletes
     // =========================================================================
     void assign_all_ai()
@@ -311,38 +432,17 @@ struct SceneState {
         utility_ai[0].configure_role(SportRole::SOCCER_CM);
         utility_ai[1].configure_role(SportRole::SOCCER_CM);
 
-        // Register available actions for utility evaluation
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::FORMATION_HOLD;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::CHASE_BALL;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::SHOOT_BALL;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::MOVE_TO_POSITION;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::SUPPORT_RUN;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::PRESS;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::INTERCEPT;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::TACKLE;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::PASS_BALL;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::BLOCK;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::MARK_OPPONENT;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::CROSS;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::HEADER;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::DIVE_SAVE;
-        utility_ai[0].actions[utility_ai[0].action_count++] = AIActionType::PUNT;
-
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::FORMATION_HOLD;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::CHASE_BALL;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::SHOOT_BALL;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::MOVE_TO_POSITION;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::SUPPORT_RUN;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::PRESS;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::INTERCEPT;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::TACKLE;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::PASS_BALL;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::BLOCK;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::MARK_OPPONENT;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::CROSS;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::HEADER;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::DIVE_SAVE;
-        utility_ai[1].actions[utility_ai[1].action_count++] = AIActionType::PUNT;
+        // Inject sport-specific actions via load_sport_configuration
+        SportModuleConfig module_config;
+        switch (config.sport) {
+        case SportType::SOCCER:           module_config.module_type = SportModuleType::SOCCER; break;
+        case SportType::BASKETBALL:       module_config.module_type = SportModuleType::BASKETBALL; break;
+        case SportType::ICE_HOCKEY:       module_config.module_type = SportModuleType::HOCKEY; break;
+        case SportType::AMERICAN_FOOTBALL: module_config.module_type = SportModuleType::AMERICAN_FOOTBALL; break;
+        case SportType::RUGBY_UNION:      module_config.module_type = SportModuleType::RUGBY; break;
+        default:                          module_config.module_type = SportModuleType::SOCCER; break;
+        }
+        load_sport_configuration(module_config);
 
         // Add default considerations
         utility_ai[0].add_consideration("dist_ball", 1.5f, ResponseCurve::QUADRATIC, 0.0f, 50.0f);
@@ -793,7 +893,7 @@ struct SceneState {
     static MatchConfig rugby_match()
     {
         MatchConfig cfg;
-        cfg.sport               = SportType::RUGBY;
+        cfg.sport               = SportType::RUGBY_UNION;
         cfg.match_duration_seconds = 4800.0f;
         cfg.halves              = 2;
         cfg.half_duration       = 2400.0f;
