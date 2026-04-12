@@ -27,6 +27,7 @@
 #include "apc_ai/apc_ai_decision.h"
 #include "apc_ai/apc_ai_perception.h"  // PerceptionRingBuffer (Phase 11b Action 6)
 #include "apc_ai/apc_ai_influence_map.h" // InfluenceMap (Phase 11b Action 7)
+#include "apc_ai/apc_ai_steering.h"
 #include "apc_input/apc_input_types.h"
 #include "apc_math/apc_vec3.h"
 #include "apc_math/apc_math_common.h"
@@ -295,6 +296,389 @@ struct SceneState {
             // Athletes on the opposing team are "threats"
             bool is_threat = (p.team != team_perspective);
             influence_map.inject_influence(p.position, 1.0f, 8.0f, is_threat);
+        }
+    }
+
+    // =========================================================================
+    // evaluate_ai_decisions — AI decision + steering pipeline (Phase 12)
+    // =========================================================================
+    // Phase 12 Action 1: The monolithic AI from Application::tick() has been
+    // moved here. This method owns the complete AI cognitive pipeline:
+    //
+    //   1. Chase budget computation (limits chasers per team)
+    //   2. Per-athlete context factor evaluation (8 inputs)
+    //   3. Utility AI evaluation with hysteresis (Phase 11b Action 5)
+    //   4. Action -> steering target mapping (16 action types)
+    //   5. Composite steering (arrive + separation blend)
+    //   6. Steering -> MotorIntent conversion via AI motor controller
+    //
+    // Parameters:
+    //   dt — Physics timestep (1/240s) for motor controller integration
+    // =========================================================================
+    void evaluate_ai_decisions(float dt)
+    {
+        const BallEntity* ball = entity_manager.find_ball();
+        Vec3 ball_pos = ball ? ball->position : Vec3(0.0f, 0.0f, 0.0f);
+        float half_field = config.field_length * 0.5f;
+
+        uint32_t home_player_idx = 0u;
+        uint32_t away_player_idx = 0u;
+
+        // --- Chase budget: only nearest N players per team may chase ---
+        struct ChaseRank { uint32_t idx; float dist; };
+        ChaseRank home_ranks[MAX_ATHLETES];
+        ChaseRank away_ranks[MAX_ATHLETES];
+        uint32_t home_rank_count = 0u, away_rank_count = 0u;
+        for (uint32_t ii = 0u; ii < entity_manager.athlete_count; ++ii) {
+            const AthleteEntity& aa = entity_manager.athletes[ii];
+            if (!aa.id.is_valid() || aa.is_human_controlled) continue;
+            float d = Vec3::length(Vec3::sub(aa.position, ball_pos));
+            if (aa.team == TEAM_HOME && home_rank_count < MAX_ATHLETES) {
+                home_ranks[home_rank_count++] = { ii, d };
+            } else if (aa.team == TEAM_AWAY && away_rank_count < MAX_ATHLETES) {
+                away_ranks[away_rank_count++] = { ii, d };
+            }
+        }
+        for (uint32_t ii = 0u; ii + 1u < home_rank_count; ++ii) {
+            for (uint32_t jj = ii + 1u; jj < home_rank_count; ++jj) {
+                if (home_ranks[jj].dist < home_ranks[ii].dist) {
+                    ChaseRank tmp = home_ranks[ii]; home_ranks[ii] = home_ranks[jj]; home_ranks[jj] = tmp;
+                }
+            }
+        }
+        for (uint32_t ii = 0u; ii + 1u < away_rank_count; ++ii) {
+            for (uint32_t jj = ii + 1u; jj < away_rank_count; ++jj) {
+                if (away_ranks[jj].dist < away_ranks[ii].dist) {
+                    ChaseRank tmp = away_ranks[ii]; away_ranks[ii] = away_ranks[jj]; away_ranks[jj] = tmp;
+                }
+            }
+        }
+
+        uint32_t max_chasers_home = 2u;
+        uint32_t max_chasers_away = 2u;
+        if (ball) {
+            if (ball->possession_team == TEAM_NONE) {
+                max_chasers_home = 2u;
+                max_chasers_away = 2u;
+            } else if (ball->possession_team == TEAM_HOME) {
+                max_chasers_home = 1u;
+                max_chasers_away = 2u;
+            } else {
+                max_chasers_home = 2u;
+                max_chasers_away = 1u;
+            }
+        }
+        uint8_t home_can_chase[MAX_ATHLETES] = {};
+        uint8_t away_can_chase[MAX_ATHLETES] = {};
+        for (uint32_t ii = 0u; ii < home_rank_count && ii < max_chasers_home; ++ii) {
+            home_can_chase[home_ranks[ii].idx] = 1u;
+        }
+        for (uint32_t ii = 0u; ii < away_rank_count && ii < max_chasers_away; ++ii) {
+            away_can_chase[away_ranks[ii].idx] = 1u;
+        }
+
+        for (uint32_t i = 0u; i < entity_manager.athlete_count; ++i) {
+            AthleteEntity& a = entity_manager.athletes[i];
+            if (!a.id.is_valid() || a.is_human_controlled) continue;
+            if (i >= MAX_AI_CONTROLLERS) continue;
+
+            float dist_to_ball = Vec3::length(Vec3::sub(a.position, ball_pos));
+            float own_goal_x = (a.team == TEAM_HOME) ? -half_field : half_field;
+            float opp_goal_x = (a.team == TEAM_HOME) ?  half_field : -half_field;
+            float dist_opp_goal = std::abs(a.position.x - opp_goal_x);
+
+            float has_possession = 0.0f;
+            if (last_possession_team == a.team && possession_timer > 0.0f) {
+                float own_rank = 0u;
+                for (uint32_t j = 0u; j < entity_manager.athlete_count; ++j) {
+                    if (j == i) continue;
+                    const AthleteEntity& other = entity_manager.athletes[j];
+                    if (!other.id.is_valid() || other.team != a.team) continue;
+                    float other_dist = Vec3::length(Vec3::sub(other.position, ball_pos));
+                    if (other_dist < dist_to_ball) ++own_rank;
+                }
+                has_possession = (own_rank == 0u) ? 1.0f : (own_rank == 1u) ? 0.5f : 0.2f;
+            }
+
+            uint8_t can_chase = (a.team == TEAM_HOME)
+                ? home_can_chase[i] : away_can_chase[i];
+
+            uint32_t form_idx_pq = (a.team == TEAM_HOME)
+                ? home_player_idx : away_player_idx;
+            float team_possession_pq = 0.0f;
+            if (last_possession_team == a.team && possession_timer > 0.0f) {
+                team_possession_pq = 1.0f;
+            }
+            float possession_factor_pq = 0.2f + 0.8f * team_possession_pq;
+            Vec3 form_pos_pq = formation_system.get_formation_position(
+                static_cast<uint8_t>(form_idx_pq),
+                ball_pos,
+                Vec3(own_goal_x, 0.0f, 0.0f),
+                Vec3(opp_goal_x, 0.0f, 0.0f),
+                possession_factor_pq);
+            form_pos_pq.x *= half_field;
+            form_pos_pq.z *= config.field_width * 0.5f;
+            form_pos_pq.y = 0.0f;
+            if (a.team == TEAM_AWAY) { form_pos_pq.x = -form_pos_pq.x; }
+            float dist_to_formation = Vec3::length(Vec3::sub(a.position, form_pos_pq));
+            float position_quality = 1.0f - std::min(dist_to_formation / 20.0f, 1.0f);
+
+            float nearest_opp_dist = 999.0f;
+            for (uint32_t j = 0u; j < entity_manager.athlete_count; ++j) {
+                if (j == i) continue;
+                const AthleteEntity& opp = entity_manager.athletes[j];
+                if (!opp.id.is_valid() || opp.team == a.team) continue;
+                float od = Vec3::length(Vec3::sub(opp.position, a.position));
+                if (od < nearest_opp_dist) nearest_opp_dist = od;
+            }
+
+            float context_inputs[8] = {
+                dist_to_ball,
+                dist_opp_goal,
+                nearest_opp_dist,
+                a.stamina,
+                has_possession,
+                1.0f,
+                0.0f,
+                position_quality
+            };
+
+            uint32_t team_idx = (a.team == TEAM_HOME) ? 0u : 1u;
+            utility_ai[team_idx].configure_role(a.role);
+
+            // Phase 11b Action 5: hysteresis evaluation (writes entity.active_action_id)
+            UtilityScore decision = utility_ai[team_idx].evaluate_with_hysteresis(
+                context_inputs, 8u, a);
+
+            if (!can_chase &&
+                (decision.action == AIActionType::CHASE_BALL ||
+                 decision.action == AIActionType::SHOOT_BALL ||
+                 decision.action == AIActionType::PRESS ||
+                 decision.action == AIActionType::TACKLE)) {
+                decision.action = AIActionType::FORMATION_HOLD;
+                decision.score *= 0.5f;
+            }
+
+            uint32_t form_idx = (a.team == TEAM_HOME)
+                ? home_player_idx : away_player_idx;
+            float team_possession = 0.0f;
+            if (last_possession_team == a.team && possession_timer > 0.0f) {
+                team_possession = 1.0f;
+            }
+            float possession_factor = 0.2f + 0.8f * team_possession;
+
+            Vec3 formation_pos = formation_system.get_formation_position(
+                static_cast<uint8_t>(form_idx),
+                ball_pos,
+                Vec3(own_goal_x, 0.0f, 0.0f),
+                Vec3(opp_goal_x, 0.0f, 0.0f),
+                possession_factor);
+            formation_pos.x *= half_field;
+            formation_pos.z *= config.field_width * 0.5f;
+            formation_pos.y = 0.0f;
+            if (a.team == TEAM_AWAY) { formation_pos.x = -formation_pos.x; }
+
+            Vec3 steer_target = formation_pos;
+            float max_speed = ai_controllers[i].steering_config.max_speed;
+            if (max_speed < APC_EPSILON) max_speed = 7.0f;
+            float urgency = 0.2f;
+
+            switch (decision.action) {
+            case AIActionType::CHASE_BALL:
+                steer_target = ball_pos;
+                urgency = 0.9f;
+                if (dist_to_ball < 3.0f && ball) {
+                    Vec3 predicted = Vec3::add(ball_pos,
+                        Vec3::scale(ball->velocity, 0.3f));
+                    predicted.y = 0.0f;
+                    steer_target = predicted;
+                }
+                break;
+            case AIActionType::SHOOT_BALL:
+                if (dist_to_ball < 1.5f) {
+                    steer_target = ball_pos;
+                    urgency = 1.0f;
+                } else {
+                    steer_target = formation_pos;
+                    urgency = 0.3f;
+                }
+                break;
+            case AIActionType::MOVE_TO_POSITION:
+                steer_target = formation_pos;
+                urgency = 0.5f;
+                break;
+            case AIActionType::SUPPORT_RUN:
+                steer_target = Vec3(
+                    (ball_pos.x + opp_goal_x) * 0.5f,
+                    0.0f,
+                    ball_pos.z + ((a.position.z > ball_pos.z) ? 5.0f : -5.0f)
+                );
+                urgency = 0.6f;
+                break;
+            case AIActionType::PRESS:
+                steer_target = ball_pos;
+                urgency = 0.95f;
+                break;
+            case AIActionType::INTERCEPT:
+                if (ball) {
+                    float predict_time = dist_to_ball / (max_speed + APC_EPSILON);
+                    if (predict_time > 1.0f) predict_time = 1.0f;
+                    steer_target = Vec3::add(ball_pos,
+                        Vec3::scale(ball->velocity, predict_time));
+                    steer_target.y = 0.0f;
+                } else {
+                    steer_target = ball_pos;
+                }
+                urgency = 0.8f;
+                break;
+            case AIActionType::FORMATION_HOLD:
+            case AIActionType::TACKLE:
+                {
+                    float tackle_opp_dist = 999.0f;
+                    Vec3 tackle_opp_pos = a.position;
+                    for (uint32_t j = 0u; j < entity_manager.athlete_count; ++j) {
+                        const AthleteEntity& opp = entity_manager.athletes[j];
+                        if (!opp.id.is_valid() || opp.team == a.team) continue;
+                        float d = Vec3::length(Vec3::sub(opp.position, a.position));
+                        if (d < tackle_opp_dist) {
+                            tackle_opp_dist = d;
+                            tackle_opp_pos = opp.position;
+                        }
+                    }
+                    static constexpr float TACKLE_RANGE = 3.0f;
+                    if (tackle_opp_dist < TACKLE_RANGE) {
+                        steer_target = tackle_opp_pos;
+                        urgency = 0.95f;
+                    } else {
+                        steer_target = formation_pos;
+                        urgency = 0.3f;
+                    }
+                }
+                break;
+            case AIActionType::PASS_BALL:
+                if (dist_to_ball < 2.0f && ball) {
+                    float best_forward = -999.0f;
+                    Vec3 best_teammate_pos = a.position;
+                    for (uint32_t j = 0u; j < entity_manager.athlete_count; ++j) {
+                        if (j == i) continue;
+                        const AthleteEntity& tm = entity_manager.athletes[j];
+                        if (!tm.id.is_valid() || tm.team != a.team) continue;
+                        float fwd = (a.team == TEAM_HOME) ? tm.position.x : -tm.position.x;
+                        float dist = Vec3::length(Vec3::sub(tm.position, a.position));
+                        if (fwd > best_forward && dist > 3.0f && dist < 30.0f) {
+                            best_forward = fwd;
+                            best_teammate_pos = tm.position;
+                        }
+                    }
+                    steer_target = best_teammate_pos;
+                    urgency = 0.9f;
+                } else {
+                    steer_target = ball_pos;
+                    urgency = 0.7f;
+                }
+                break;
+            case AIActionType::BLOCK:
+                steer_target = Vec3(
+                    (ball_pos.x + own_goal_x) * 0.5f,
+                    0.0f,
+                    ball_pos.z
+                );
+                urgency = 0.85f;
+                break;
+            case AIActionType::MARK_OPPONENT:
+                {
+                    float mark_dist = 999.0f;
+                    Vec3 mark_pos = a.position;
+                    for (uint32_t j = 0u; j < entity_manager.athlete_count; ++j) {
+                        const AthleteEntity& opp = entity_manager.athletes[j];
+                        if (!opp.id.is_valid() || opp.team == a.team) continue;
+                        float d = Vec3::length(Vec3::sub(opp.position, a.position));
+                        if (d < mark_dist) {
+                            mark_dist = d;
+                            mark_pos = opp.position;
+                        }
+                    }
+                    steer_target = Vec3(
+                        (mark_pos.x + own_goal_x) * 0.45f,
+                        0.0f,
+                        mark_pos.z
+                    );
+                    urgency = 0.6f;
+                }
+                break;
+            case AIActionType::CROSS:
+                if (dist_to_ball < 2.0f && ball) {
+                    steer_target = Vec3(opp_goal_x * 0.6f, 0.0f, 0.0f);
+                    urgency = 0.9f;
+                } else {
+                    steer_target = ball_pos;
+                    urgency = 0.7f;
+                }
+                break;
+            case AIActionType::HEADER:
+                steer_target = ball_pos;
+                urgency = 0.85f;
+                break;
+            case AIActionType::DIVE_SAVE:
+                if (ball) {
+                    Vec3 dive_target = Vec3::add(ball_pos,
+                        Vec3::scale(ball->velocity, 0.15f));
+                    dive_target.x = own_goal_x + (a.team == TEAM_HOME ? 2.0f : -2.0f);
+                    dive_target.y = 0.0f;
+                    steer_target = dive_target;
+                } else {
+                    steer_target = Vec3(own_goal_x, 0.0f, 0.0f);
+                }
+                urgency = 1.0f;
+                break;
+            case AIActionType::PUNT:
+                steer_target = ball_pos;
+                urgency = 0.8f;
+                break;
+            default:
+                steer_target = formation_pos;
+                urgency = 0.2f;
+                break;
+            }
+
+            SteeringOutput primary = SteeringSystem::arrive(
+                a.position, steer_target, max_speed, 0.5f, 4.0f);
+            primary.urgency = urgency;
+
+            Vec3 all_neighbors[MAX_NEIGHBOR_COUNT * 2];
+            uint32_t all_neighbor_count = 0u;
+            for (uint32_t j = 0u; j < entity_manager.athlete_count && all_neighbor_count < MAX_NEIGHBOR_COUNT * 2; ++j) {
+                if (j == i) continue;
+                const AthleteEntity& other = entity_manager.athletes[j];
+                if (!other.id.is_valid()) continue;
+                float ndist = Vec3::length(Vec3::sub(a.position, other.position));
+                if (ndist < 2.5f) {
+                    all_neighbors[all_neighbor_count++] = other.position;
+                }
+            }
+            SteeringOutput sep = SteeringSystem::separation(
+                all_neighbors, all_neighbor_count, a.position,
+                1.5f, 20.0f);
+
+            WeightedSteering blended[2];
+            blended[0].behavior = SteeringBehavior::ARRIVE;
+            blended[0].weight = 1.0f;
+            blended[0].output = primary;
+            blended[1].behavior = SteeringBehavior::SEPARATION;
+            blended[1].weight = 1.5f;
+            blended[1].output = sep;
+
+            SteeringOutput final_steering = SteeringSystem::blend(blended, 2u);
+
+            a.current_intent = ai_controllers[i].update(
+                final_steering, a.position, a.orientation, dt);
+
+            // Store chosen action for ball interaction (reads a.flags & 0xFF)
+            a.flags = static_cast<uint16_t>(
+                a.flags & 0xFF00u) | static_cast<uint16_t>(decision.action);
+
+            if (a.team == TEAM_HOME) ++home_player_idx;
+            else ++away_player_idx;
         }
     }
 
